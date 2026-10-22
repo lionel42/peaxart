@@ -35,12 +35,33 @@ def noise_median(y: np.ndarray, proportion: float) -> float:
     return float(np.median(np.sort(y)[: int(len(y) * proportion)]))
 
 
+def noise_std(y: np.ndarray) -> float:
+    """Robust standard deviation of the noise of a spectrum.
+
+    From the point-to-point differences (MAD / sqrt(2)): the peaks make only a
+    few large differences, which the median ignores.
+    """
+    diffs = np.diff(np.asarray(y, dtype=float))
+    if len(diffs) == 0:
+        return 0.0
+    return float(1.4826 * np.median(np.abs(diffs - np.median(diffs))) / np.sqrt(2))
+
+
 def detect_mass_peaks(x, y, sigma_centre: float, dx: float, config: ExtractionConfig) -> np.ndarray:
-    """Detected peaks (position, apex) of one spectrum, above the noise."""
+    """Detected peaks (position, apex) of one spectrum, above the noise.
+
+    Legacy rule (when several peaks are detected): apex >= ``mz_peak_over_median``
+    x the noise median. With ``mz_noise_k``, also apex >= noise median +
+    ``mz_noise_k`` x the noise standard deviation (:func:`noise_std`).
+    """
     found = peak_detect(x, y, sigma_centre, config.mz_slope_threshold, dx)
+    if len(found) == 0:
+        return found
+    median = noise_median(np.asarray(y), config.mz_median_proportion)
     if len(found) > 1:
-        median = noise_median(np.asarray(y), config.mz_median_proportion)
         found = found[found[:, 1] >= config.mz_peak_over_median * median]
+    if config.mz_noise_k is not None and len(found):
+        found = found[found[:, 1] >= median + config.mz_noise_k * noise_std(y)]
     return found
 
 
@@ -98,10 +119,10 @@ def fit_spectrum(
             return p[0] + np.sum(peaks, axis=0) - y
 
         if config.legacy_numerics:
-            res = fit(residual, p0, lo, hi)
+            res = fit(residual, p0, lo, hi, max_iterations=config.max_iterations)
         else:
             fast_residual, fast_jac = _fast_model(x, y, sigma, alphas, convention)
-            res = fit(fast_residual, p0, lo, hi, jac=fast_jac, exact=False)
+            res = fit(fast_residual, p0, lo, hi, jac=fast_jac, exact=False, max_iterations=config.max_iterations)
         baseline = res.params[0]
         mu = res.params[1::2]
         area = res.params[2::2]

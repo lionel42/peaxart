@@ -277,7 +277,7 @@ def extract_domain(
                 (w_start * dt, w_stop * dt), w_x, w_mz, config.conf_int, config.rt_peak_broadness,
                 config.ratio_to_linear_fit, config.rt_position_bound, config.convention,
                 config.legacy_numerics, config.peak_linear_ratio, config.peak_min_coverage,
-                rejected=window_rejected,
+                rejected=window_rejected, max_iterations=config.max_iterations,
             )
             rejected.extend(r for r in window_rejected if w_start * dt <= r["rt"] < w_stop * dt)
             if fitted is None:

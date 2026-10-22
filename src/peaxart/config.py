@@ -26,6 +26,11 @@ class ExtractionConfig:
     several times faster; results differ by rounding only, except for
     ill-conditioned fits of weak peaks."""
 
+    max_iterations: int | None = 100
+    """Maximal number of Levenberg-Marquardt iterations of a fit (the fit then
+    keeps the best parameters found). Fits of spectra with many weak peaks
+    can otherwise take thousands of iterations. The legacy code (lmfit) used 2000."""
+
     # --- mass domain (per scan) ------------------------------------------
     mz_slope_threshold: float = 1.25
     """Slope threshold of the peak detection in a spectrum (intensity per x unit), legacy PTtof."""
@@ -33,6 +38,10 @@ class ExtractionConfig:
     """A detected mass peak is kept if its apex is above this times the noise median."""
     mz_median_proportion: float = 1.0 / 3.0
     """The noise median is the median of this proportion of the smallest values of the spectrum."""
+    mz_noise_k: float | None = 3.0
+    """A detected mass peak must also have its apex at least this many noise standard
+    deviations above the noise median (spectra of strong peaks otherwise have
+    dozens of noise "peaks", which make the fits slow). None: legacy rule only."""
     mz_height_threshold: float = 2.6
     """After the fit, a mass peak is kept if its fitted height is above this times the noise median."""
     mz_position_bound: float = 2.0
@@ -95,7 +104,8 @@ class ExtractionConfig:
     @classmethod
     def legacy(cls, **changes) -> ExtractionConfig:
         """The behaviour of the legacy alpinac extraction (no per-peak tests)."""
-        return cls(peak_linear_ratio=None, peak_min_coverage=None, **changes)
+        return cls(**{"peak_linear_ratio": None, "peak_min_coverage": None, "max_iterations": 2000,
+                      "mz_noise_k": None, **changes})
 
     def replace(self, **changes) -> ExtractionConfig:
         return replace(self, **changes)

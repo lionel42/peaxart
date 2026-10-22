@@ -25,6 +25,10 @@ class FitResult:
     """Standard errors (nan when not available, 0 for fixed parameters)."""
     residual: np.ndarray
     success: bool
+    nfev: int
+    """Number of evaluations of the residual."""
+    aborted: bool
+    """The fit was stopped by ``max_iterations``."""
     raw: list
     """The parameters with lmfit's types: a value clipped to a bound is that
     bound (e.g. a float32 scalar). Needed to restart fits as the legacy code."""
@@ -96,7 +100,8 @@ def _from_internal_vec(u, lo, hi):
     return x
 
 
-def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True) -> FitResult:
+def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
+        max_iterations: int | None = 2000) -> FitResult:
     """Minimise ``sum(residual(params)**2)`` with bounds.
 
     :param residual: function params (full vector) -> residual array.
@@ -107,6 +112,11 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True)
         (external parameters). Without it, finite differences as lmfit.
     :param exact: reproduce lmfit bit for bit (scalar transformations);
         False is faster and differs only by rounding.
+    :param max_iterations: the fit stops after ``max_iterations * (n + 1)``
+        evaluations of the residual (n fitted parameters; with finite
+        differences one iteration costs n + 1 evaluations). 2000 is the lmfit
+        default and then, as lmfit, the last evaluated parameters are returned;
+        otherwise the best parameters found so far. None: no limit.
     """
     x0_raw = list(x0)
     n = len(x0_raw)
@@ -141,8 +151,9 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True)
         # lmfit clips the values to the bounds (rounding of the transformation)
         return np.minimum(np.maximum(p, lo), hi)
 
-    max_nfev = 2000 * (len(iv) + 1)
-    state = {"nfev": 0, "last": None}
+    lmfit_like = max_iterations == 2000
+    max_nfev = (max_iterations if max_iterations is not None else 10**9) * (len(iv) + 1)
+    state = {"nfev": 0, "last": None, "best": None, "best_ssr": np.inf}
 
     class _Abort(Exception):
         pass
@@ -153,7 +164,12 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True)
         state["last"] = np.array(u, copy=True)
         if state["nfev"] > max_nfev:
             raise _Abort
-        return np.asarray(residual(full(u)), dtype=float)
+        r = np.asarray(residual(full(u)), dtype=float)
+        if not lmfit_like:
+            ssr = float(np.dot(r, r))
+            if ssr < state["best_ssr"]:
+                state["best_ssr"], state["best"] = ssr, state["last"]
+        return r
 
     dfun = None
     if jac is not None:
@@ -167,7 +183,8 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True)
             gtol=0.0, maxfev=2 * max_nfev, epsfcn=1e-10, factor=100, diag=None,
         )
     except _Abort:
-        u, cov, ier = state["last"], None, -1
+        u = state["last"] if lmfit_like or state["best"] is None else state["best"]
+        cov, ier = None, -1
     params = full(u)
     res = np.asarray(residual(params), dtype=float)
     raw = list(fixed)
@@ -187,4 +204,5 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True)
         scale = _gradient_scale(u, lo_v, hi_v)
         covar = cov * redchi * np.outer(scale, scale)
         stderr[iv] = np.sqrt(np.abs(np.diag(covar)))
-    return FitResult(params=params, stderr=stderr, residual=res, success=ier in (1, 2, 3, 4), raw=raw)
+    return FitResult(params=params, stderr=stderr, residual=res, success=ier in (1, 2, 3, 4), raw=raw,
+                     nfev=state["nfev"], aborted=ier == -1)

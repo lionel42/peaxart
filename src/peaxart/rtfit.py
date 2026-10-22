@@ -152,6 +152,7 @@ def fit_chromato(
     peak_linear_ratio: float | None = None,
     peak_min_coverage: float | None = None,
     rejected: list | None = None,
+    max_iterations: int | None = 2000,
 ) -> ChromatoPeaks | None:
     """Fit chromatographic peaks to the per-scan areas ``area(rt)``.
 
@@ -204,7 +205,7 @@ def fit_chromato(
                      for i in range(n_peaks)]
             return p[0] + np.sum(peaks, axis=0) - y
 
-        res = fit(residual, p0, lo, hi, exact=legacy_numerics)
+        res = fit(residual, p0, lo, hi, exact=legacy_numerics, max_iterations=max_iterations)
         params = res.params
         baseline = params[0]
         mu = params[1::4][:n_peaks]
