@@ -75,19 +75,21 @@ e.g. `ExtractionConfig(rt_sigma=1.5)` for another chromatography.
 
 ### Data from TOFWERK h5 files
 
-peaxart does not read h5 files. `benchmarks/compare_full.py` (`load_case`)
-shows how to get the arrays and the calibration with the legacy alpinac.
+peaxart does not read h5 files: get the intensity, rt and the mass calibration
+with your h5 reader (e.g. the legacy alpinac) and pass them as arrays.
 
 ## Example notebook
 
-`notebooks/examples.ipynb` plots the example domains (real data, `tests/data/domains`):
+`notebooks/examples.ipynb` plots example domains (real data: `tests/data/domains`, and
+`data/examples` for coelution, long and late peaks)
+with the functions of `peaxart.plotting` (`analyse_domain`, `field_figure`, `plot_groups`):
 the signal in the rt / m/z plane with the per-scan and the extracted peaks, and for
 each peak the chromatographic fit and the mass fit at the apex.
 
 ```bash
 pip install -e ".[notebook]"
 jupyter lab notebooks/examples.ipynb
-python notebooks/make_examples_notebook.py   # regenerate and re-run it
+python notebooks/make_examples_notebook.py   # regenerate it (--run: also execute, slow)
 ```
 
 ## Numerics and speed
@@ -120,6 +122,27 @@ to noise and background elevations):
 candidates, with the reason and the straight background that explains their
 data as well (`line_rt`, `line`), as plotted in the example notebook.
 
+Coeluting compounds closer than the rt peak detection can separate (e.g. 2- and
+3-methylhexane, 2.9 s apart) are split: after the rt fit, one more peak is tried where
+the residual is largest (`rt_extra_peaks`, up to 2). It is kept only if the fit is
+clearly better (`rt_extra_peak_ratio`), the new peak is not small (`rt_extra_peak_min_height`)
+nor overlapping another one (`rt_extra_peak_min_separation`), and the data show a shoulder
+or a dip between the two apexes (`rt_extra_peak_shoulder`): a single tailing peak is
+otherwise fitted better with a second small peak in its tail.
+
+A single outlier scan in the per-scan areas of an m/z group (`rt_outlier_k`: one point
+deviating from its neighbours 20x more than typical and 3x more than any other point) is
+left out of the rt fit, otherwise the fit puts a narrow peak on it, which is then
+rejected. Seen on the ringing peaks of strong mass peaks, whose outlier is the apex scan
+of the strong peak. The removed points are in `scans["outlier"]` (`return_scans=True`).
+
+Mass peaks are also required to stand above the noise: apex >= noise median +
+`mz_noise_k` (3) x a robust noise standard deviation. The legacy rule (1.3 x the
+noise median) let dozens of noise bumps per spectrum through next to strong
+peaks, which made the fits very slow. `max_iterations` (100) limits each mass fit; a fit
+stopped by its limit keeps the best parameters found (`on_abort="best"`; lmfit and
+`ExtractionConfig.legacy()`: the last ones, `"last"`).
+
 The reported values also differ where the legacy output was wrong:
 
 - `peak_width` in the alpinac file is the m/z sigma of the peaks (legacy:
@@ -129,15 +152,9 @@ The reported values also differ where the legacy output was wrong:
 - a peak on the edge of two unit-mass domains is reported once;
 - compound indices of different rt windows do not collide.
 
-See `PLAN.md` for the validation (MassBank reprocessing case, 4 compounds,
-1196 domains) and all details.
-
 ## Development
 
 ```bash
-python -m pytest
-# validation against the legacy code (needs the legacy alpinac, /shared/pyenv):
-PYTHONPATH=src /shared/pyenv/bin/python benchmarks/legacy/dump_legacy_domains.py benchmarks/legacy/data
-PYTHONPATH=src /shared/pyenv/bin/python benchmarks/compare_legacy.py --calibration legacy
-PYTHONPATH=src /shared/pyenv/bin/python benchmarks/compare_full.py HFC-236ea -j 8
+python -m pytest            # quick (~10 s)
+python -m pytest -m slow    # end-to-end on data/examples (~30 s)
 ```
