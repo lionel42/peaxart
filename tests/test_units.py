@@ -7,6 +7,7 @@ from peaxart.config import ExtractionConfig
 from peaxart.detect import histogram_centres, peak_detect
 from peaxart.leastsq import fit
 from peaxart.mzfit import fit_spectrum
+from peaxart.rtfit import rt_outliers
 from peaxart.shapes import chromato, chromato_area, pseudo_voigt, pseudo_voigt_height
 
 
@@ -56,6 +57,27 @@ def test_bounded_fit():
     assert r.params[0] == pytest.approx(2.0, rel=1e-6)
 
 
+def test_fit_on_abort():
+    # a fit stopped by max_iterations: "best" returns the lowest sum of squares
+    # evaluated, "last" (lmfit) the last parameters tried, here much worse
+    x = np.linspace(0, 10, 50)
+    y = 3.0 * np.exp(-((x - 4.0) ** 2) / 2.0)
+    ssr = []
+
+    def residual(p):
+        r = p[0] * np.exp(-((x - p[1]) ** 2) / 2.0) - y
+        ssr.append(float(r @ r))
+        return r
+
+    best = fit(residual, [1.0, 6.0], max_iterations=6, on_abort="best")
+    assert np.sum(best.residual**2) == pytest.approx(min(ssr[:-1]))  # the last call is the final evaluation
+    last = fit(residual, [1.0, 6.0], max_iterations=6, on_abort="last")
+    assert best.aborted and last.aborted
+    assert np.sum(best.residual**2) < 1e-3 * np.sum(last.residual**2)
+    with pytest.raises(ValueError):
+        fit(residual, [1.0, 6.0], on_abort="first")
+
+
 def test_fit_spectrum_recovers_peaks():
     x = np.arange(1000.0, 1080.0)
     sigma, alpha = 0.9, 0.5
@@ -93,6 +115,51 @@ def test_extract_domain_synthetic():
     # m/z given as a calibration function
     df2 = peaxart.extract_domain(intensity, rt, lambda r, xx: ((xx + 3700.0) / 2829.0) ** 2, sigma, alpha, x=x)
     assert df2["mz"].iloc[0] == pytest.approx(p["mz"], rel=1e-9)
+
+
+def test_extra_peak_resolves_coelution():
+    # two compounds 2.9 s apart (like 2- and 3-methylhexane): one peak for the rt
+    # peak detection, the extra-peak trial splits it
+    _, rt, x, mz, sigma, alpha = synthetic(n_scans=90)
+    x_peak = np.interp(np.sqrt(69.0), np.sqrt(mz), x)
+    profile = chromato(rt, 1.0, 1605.0, 1.4, 0.3, "legacy") + chromato(rt, 0.8, 1607.9, 1.4, 0.3, "legacy")
+    rng = np.random.default_rng(0)
+    intensity = np.array([1.0 + pseudo_voigt(x, 4000.0 * h, x_peak, sigma, alpha, "legacy") for h in profile])
+    intensity = (intensity + rng.normal(0, 0.3, intensity.shape)).astype(np.float32)
+    single = peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x, config=ExtractionConfig(rt_extra_peaks=0))
+    assert len(single) == 1
+    df = peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x)
+    assert sorted(df["rt"]) == pytest.approx([1605.0, 1607.9], abs=0.05)
+    assert sorted(df["rt_sigma"]) == pytest.approx([1.4, 1.4], abs=0.05)
+
+
+def test_outlier_scan_does_not_hide_peak():
+    # a weak peak whose area is 9x too large in one scan (as the ringing peaks of a strong
+    # mass peak at its apex scan): the rt fit put a narrow peak on that scan, rejected
+    _, rt, x, mz, sigma, alpha = synthetic()
+    x_peak = np.interp(np.sqrt(69.0), np.sqrt(mz), x)
+    profile = chromato(rt, 1.0, 1605.0, 1.5, 0.3, "legacy")
+    profile[np.argmax(profile) - 1] *= 9
+    rng = np.random.default_rng(0)
+    intensity = np.array([1.0 + pseudo_voigt(x, 100.0 * h, x_peak, sigma, alpha, "legacy") for h in profile])
+    intensity = (intensity + rng.normal(0, 0.3, intensity.shape)).astype(np.float32)
+    assert len(peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x, config=ExtractionConfig(rt_outlier_k=None))) == 0
+    df, _, scans = peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x, return_rejected=True, return_scans=True)
+    assert len(df) == 1 and df["rt"].iloc[0] == pytest.approx(1605.0, abs=0.05)
+    assert df["rt_sigma"].iloc[0] == pytest.approx(1.5, abs=0.15)
+    assert scans["outlier"].sum() == 1
+
+
+def test_rt_outliers():
+    t = np.arange(60) / 6.0
+    smooth = 1000 * np.exp(-((t - 5) ** 2) / 4) + np.random.default_rng(1).normal(0, 5, len(t))
+    assert not rt_outliers(smooth, 20).any()
+    spiked = smooth.copy()
+    spiked[31] *= 5
+    assert np.flatnonzero(rt_outliers(spiked, 20)).tolist() == [31]
+    # noise with several spikes: no single outlier, all points kept
+    noisy = np.abs(np.random.default_rng(2).normal(0, 1, 60)) ** 3
+    assert not rt_outliers(noisy, 20).any()
 
 
 def test_extract_full_array_and_export(tmp_path):

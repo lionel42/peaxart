@@ -29,3 +29,5 @@ packages = ["src/peaxart"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: end-to-end checks on the example domains (run with -m slow)"]
+addopts = "-m 'not slow'"

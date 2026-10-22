@@ -27,9 +27,13 @@ class ExtractionConfig:
     ill-conditioned fits of weak peaks."""
 
     max_iterations: int | None = 100
-    """Maximal number of Levenberg-Marquardt iterations of a fit (the fit then
-    keeps the best parameters found). Fits of spectra with many weak peaks
-    can otherwise take thousands of iterations. The legacy code (lmfit) used 2000."""
+    """Maximal number of Levenberg-Marquardt iterations of a per-scan mass fit (then the
+    fit stops and keeps the parameters chosen by ``on_abort``). Spectra with many weak peaks can otherwise
+    take thousands of iterations. The rt fits keep the lmfit limit (2000), they need
+    more iterations. The legacy code (lmfit) used 2000."""
+    on_abort: str = "best"
+    """Parameters kept when a fit (mass or rt) is stopped by its iteration limit:
+    ``"best"`` found so far, or ``"last"`` evaluated, as lmfit (legacy)."""
 
     # --- mass domain (per scan) ------------------------------------------
     mz_slope_threshold: float = 1.25
@@ -89,6 +93,37 @@ class ExtractionConfig:
     sigma of its apex have a per-scan mass peak (a "peak" interpolated across a
     gap of the data). None: no test. Not in the legacy code."""
 
+    rt_outlier_k: float | None = 20.0
+    """A per-scan area of an m/z group that deviates from its neighbours by more than this
+    times the robust spread of such deviations, and 3 times more than any other point
+    (see :func:`peaxart.rtfit.rt_outliers`), is left out of the rt fit. One outlier scan
+    otherwise attracts a narrow peak, which then fails the per-peak tests (e.g. the
+    ringing peaks of a strong mass peak: their outlier is its apex scan). None: keep
+    all points (legacy)."""
+
+    rt_extra_peaks: int = 2
+    """After the rt fit of an m/z group, try up to this many additional peaks, one at a
+    time, where the residual is largest (coeluting compounds closer than the rt peak
+    detection can separate). 0: legacy behaviour."""
+    rt_extra_peak_ratio: float = 0.8
+    """An additional peak is kept if the residual standard deviation (corrected for the
+    number of parameters) falls below this times the one without it, and the peak
+    passes the per-peak tests."""
+    rt_extra_peak_min_height: float = 0.1
+    """... and if its height is at least this times the one of the highest peak of the fit.
+    The residual test alone accepts small peaks that fill the tail of a single peak (the
+    chromatographic function does not follow the tail exactly): they are 1-5 % of the
+    main peak, a coeluting compound that makes a visible shoulder is much higher."""
+    rt_extra_peak_min_separation: float = 1.5
+    """... and if it is at least this times the (larger) rt sigma away from the other peaks:
+    a single peak can also be fitted by two overlapping ones (seen up to 1.2 sigma apart;
+    2- and 3-methylhexane, which make a clear shoulder, are 1.8 sigma apart)."""
+    rt_extra_peak_shoulder: bool = True
+    """... and if the data show a shoulder or a dip between the two apexes: the curvature
+    of the (smoothed) per-scan areas changes sign at least twice between them (a single
+    peak has one inflection on its flank). Without it, broad low peaks are added to fill
+    the tail of strongly tailing peaks (e.g. m/p-xylene)."""
+
     lod: float = 0.0
     """Domains whose maximal intensity is at or below this are skipped."""
 
@@ -104,8 +139,9 @@ class ExtractionConfig:
     @classmethod
     def legacy(cls, **changes) -> ExtractionConfig:
         """The behaviour of the legacy alpinac extraction (no per-peak tests)."""
-        return cls(**{"peak_linear_ratio": None, "peak_min_coverage": None, "max_iterations": 2000,
-                      "mz_noise_k": None, **changes})
+        return cls(**{"peak_linear_ratio": None, "peak_min_coverage": None, "max_iterations": 2000, "on_abort": "last",
+                      "mz_noise_k": None,
+                      "rt_extra_peaks": 0, "rt_outlier_k": None, **changes})
 
     def replace(self, **changes) -> ExtractionConfig:
         return replace(self, **changes)

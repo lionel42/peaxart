@@ -70,6 +70,34 @@ def _linear_fit_std(x, y):
     return np.sqrt(np.sum((x * a + b - y) ** 2) / float(n - 1))
 
 
+def rt_outliers(y, k: float, dominance: float = 3.0, half_width: int = 2) -> np.ndarray:
+    """Mask of the single outlier of a series of per-scan areas (sorted by rt), if any.
+
+    The deviation of each point from the median of its ``half_width`` neighbours on
+    each side (itself excluded) is scored in units of the robust spread of all the
+    deviations (1.4826 x their median absolute value). The point with the largest
+    score is an outlier if its score is above ``k`` and ``dominance`` times the
+    second largest: one scan sticking out of a smooth profile. A noisy series has
+    several large scores and keeps all its points.
+    """
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    out = np.zeros(n, bool)
+    if n < 2 * half_width + 3:
+        return out
+    padded = np.pad(y, half_width, mode="reflect")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, 2 * half_width + 1)
+    deviation = np.abs(y - np.median(np.delete(windows, half_width, axis=1), axis=1))
+    spread = 1.4826 * np.median(deviation)
+    if spread <= 0:
+        return out
+    score = deviation / spread
+    first, second = np.argsort(score)[::-1][:2]
+    if score[first] > k and score[first] > dominance * score[second]:
+        out[first] = True
+    return out
+
+
 def local_linear_test(x, y, y_peaks, baseline, k, support_fraction=0.01):
     """Does peak ``k`` explain its region better than a straight background?
 
@@ -153,6 +181,7 @@ def fit_chromato(
     peak_min_coverage: float | None = None,
     rejected: list | None = None,
     max_iterations: int | None = 2000,
+    on_abort: str = "best",
 ) -> ChromatoPeaks | None:
     """Fit chromatographic peaks to the per-scan areas ``area(rt)``.
 
@@ -170,6 +199,8 @@ def fit_chromato(
     :param rejected: if a list is given, the peaks removed by the two tests
         above are appended to it (dicts with their parameters, the reason and
         the local line that explains the data as well, for plots).
+    :param max_iterations, on_abort: iteration limit of each fit and the parameters
+        kept when it is reached (see :func:`peaxart.leastsq.fit`).
     :return: the peaks, or None if the fit is rejected.
     """
     x = np.asarray(rt, dtype=float)
@@ -205,7 +236,7 @@ def fit_chromato(
                      for i in range(n_peaks)]
             return p[0] + np.sum(peaks, axis=0) - y
 
-        res = fit(residual, p0, lo, hi, exact=legacy_numerics, max_iterations=max_iterations)
+        res = fit(residual, p0, lo, hi, exact=legacy_numerics, max_iterations=max_iterations, on_abort=on_abort)
         params = res.params
         baseline = params[0]
         mu = params[1::4][:n_peaks]

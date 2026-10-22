@@ -119,10 +119,11 @@ def fit_spectrum(
             return p[0] + np.sum(peaks, axis=0) - y
 
         if config.legacy_numerics:
-            res = fit(residual, p0, lo, hi, max_iterations=config.max_iterations)
+            res = fit(residual, p0, lo, hi, max_iterations=config.max_iterations, on_abort=config.on_abort)
         else:
             fast_residual, fast_jac = _fast_model(x, y, sigma, alphas, convention)
-            res = fit(fast_residual, p0, lo, hi, jac=fast_jac, exact=False, max_iterations=config.max_iterations)
+            res = fit(fast_residual, p0, lo, hi, jac=fast_jac, exact=False, max_iterations=config.max_iterations,
+                      on_abort=config.on_abort)
         baseline = res.params[0]
         mu = res.params[1::2]
         area = res.params[2::2]

@@ -167,7 +167,11 @@ def plot_group_detail(d, peaks, rejected, scans, g, config: ExtractionConfig | N
     g_rej = rejected[[group_of(scans, m) == g for m in rejected["mz"]]] if len(rejected) else rejected
     with plt.rc_context(STYLE):
         fig, (ax_rt, ax_mz) = plt.subplots(1, 2, figsize=(10, 3.2), gridspec_kw=dict(wspace=0.25))
-        ax_rt.scatter(scans["rt"][sel], scans["area"][sel], s=14, c=INK, lw=0, label="per-scan area")
+        out = sel & scans.get("outlier", np.zeros_like(sel))
+        ax_rt.scatter(scans["rt"][sel & ~out], scans["area"][sel & ~out], s=14, c=INK, lw=0, label="per-scan area")
+        if out.any():
+            ax_rt.scatter(scans["rt"][out], scans["area"][out], s=30, facecolors="none", edgecolors=REJECTED,
+                          lw=1.4, label="outlier scan (not fitted)", zorder=5)
         t = np.linspace(d["rt"][0], d["rt"][-1], 600)
         for k, p in enumerate(g_peaks.itertuples()):
             ax_rt.plot(t, p.baseline + chromato(t, p.height, p.rt, p.rt_sigma, p.rt_tailing, config.convention),

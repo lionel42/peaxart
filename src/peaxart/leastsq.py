@@ -101,7 +101,7 @@ def _from_internal_vec(u, lo, hi):
 
 
 def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
-        max_iterations: int | None = 2000) -> FitResult:
+        max_iterations: int | None = 2000, on_abort: str = "best") -> FitResult:
     """Minimise ``sum(residual(params)**2)`` with bounds.
 
     :param residual: function params (full vector) -> residual array.
@@ -115,8 +115,10 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
     :param max_iterations: the fit stops after ``max_iterations * (n + 1)``
         evaluations of the residual (n fitted parameters; with finite
         differences one iteration costs n + 1 evaluations). 2000 is the lmfit
-        default and then, as lmfit, the last evaluated parameters are returned;
-        otherwise the best parameters found so far. None: no limit.
+        default. None: no limit.
+    :param on_abort: the parameters returned when the fit is stopped by
+        ``max_iterations``: ``"best"`` (lowest sum of squares evaluated) or
+        ``"last"`` (the last evaluated, as lmfit).
     """
     x0_raw = list(x0)
     n = len(x0_raw)
@@ -151,7 +153,9 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
         # lmfit clips the values to the bounds (rounding of the transformation)
         return np.minimum(np.maximum(p, lo), hi)
 
-    lmfit_like = max_iterations == 2000
+    if on_abort not in ("best", "last"):
+        raise ValueError(f"on_abort must be 'best' or 'last', not {on_abort!r}")
+    keep_best = on_abort == "best"
     max_nfev = (max_iterations if max_iterations is not None else 10**9) * (len(iv) + 1)
     state = {"nfev": 0, "last": None, "best": None, "best_ssr": np.inf}
 
@@ -165,7 +169,7 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
         if state["nfev"] > max_nfev:
             raise _Abort
         r = np.asarray(residual(full(u)), dtype=float)
-        if not lmfit_like:
+        if keep_best:
             ssr = float(np.dot(r, r))
             if ssr < state["best_ssr"]:
                 state["best_ssr"], state["best"] = ssr, state["last"]
@@ -183,7 +187,7 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
             gtol=0.0, maxfev=2 * max_nfev, epsfcn=1e-10, factor=100, diag=None,
         )
     except _Abort:
-        u = state["last"] if lmfit_like or state["best"] is None else state["best"]
+        u = state["best"] if keep_best and state["best"] is not None else state["last"]
         cov, ier = None, -1
     params = full(u)
     res = np.asarray(residual(params), dtype=float)

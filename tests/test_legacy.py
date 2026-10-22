@@ -1,4 +1,4 @@
-"""peaxart reproduces the legacy alpinac extraction (recorded domains, see benchmarks/legacy)."""
+"""peaxart reproduces the legacy alpinac extraction (domains recorded from the legacy code)."""
 
 import numpy as np
 import pytest
