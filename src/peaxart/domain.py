@@ -169,7 +169,8 @@ def extract_domain(
     config: ExtractionConfig | None = None,
     dt: float | None = None,
     return_rejected: bool = False,
-) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+    return_scans: bool = False,
+) -> pd.DataFrame | tuple:
     """Extract the peaks of one domain (typically one unit mass +-0.5 and ~10 s).
 
     :param intensity: (n_scans, n_points) signal. Keep the native precision
@@ -188,6 +189,9 @@ def extract_domain(
         ``rt``, ``mz``, ``height``, ``rt_sigma``, ``rt_tailing``, ``baseline``,
         ``linear_ratio``, ``coverage``, ``reason`` and the local line that
         explains the data as well (``line_rt``, ``line``: arrays).
+    :param return_scans: also return the per-scan mass peaks: dict of arrays
+        ``rt``, ``scan``, ``x``, ``area``, ``sigma``, ``alpha``, ``baseline``,
+        ``mz`` and ``group`` (m/z group, -1: none). Returned last.
     :return: one row per chromatographic peak, columns :data:`PEAK_COLUMNS`:
 
         - ``rt``, ``rt_u``: retention time (s) and its standard error
@@ -210,10 +214,16 @@ def extract_domain(
     mz = MzAxis(mz, x, rt)
     rejected: list[dict] = []
 
+    scans_out = {k: np.zeros(0) for k in ("rt", "scan", "x", "area", "sigma", "alpha", "baseline", "mz")}
+    scans_out["group"] = np.zeros(0, dtype=np.int64)
+
     def result(df):
-        if not return_rejected:
-            return df
-        return df, pd.DataFrame(rejected, columns=REJECTED_COLUMNS)
+        out = [df]
+        if return_rejected:
+            out.append(pd.DataFrame(rejected, columns=REJECTED_COLUMNS))
+        if return_scans:
+            out.append(scans_out)
+        return out[0] if len(out) == 1 else tuple(out)
 
     if intensity.size == 0 or np.max(intensity) <= config.lod:
         return result(_empty())
@@ -227,6 +237,7 @@ def extract_domain(
     order = np.argsort(scans["x"])
     scans = {k: v[order] for k, v in scans.items()}
     group = group_by_mz(scans, x, mz, rt, config)
+    scans_out = dict(scans, group=group)
 
     sigma_of_x = _as_sigma(sigma)
     rows = []

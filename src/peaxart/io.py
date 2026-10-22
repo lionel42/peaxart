@@ -103,3 +103,29 @@ def to_alpinac(
                 f.write("\t".join(formats[c].format(v) if c in formats else str(v)
                                   for c, v in zip(ALPINAC_COLUMNS, row)) + "\n")
     return out
+
+
+def load_domain(path: str | PathLike) -> dict:
+    """Load an example domain (``.npz`` of ``tests/data/domains`` or ``data/examples``).
+
+    :return: dict with ``name``, ``intensity`` (float32), ``rt``, ``x`` (tof
+        index), ``mz``, ``sigma`` (function of x, tof index units), ``alpha``,
+        ``dt`` and ``meta`` (description, empty for the recorded test domains),
+        the arguments of :func:`peaxart.extract_domain`.
+    """
+    import json
+
+    path = Path(path)
+    z = np.load(path)
+    intercept, slope = float(z["sigma_tofidx_b"]), float(z["sigma_tofidx_slope"])
+    return {
+        "name": path.stem,
+        "intensity": z["intensity"].astype(np.float32),
+        "rt": z["rt"],
+        "x": z["tofidx"],
+        "mz": z["mz"],
+        "sigma": lambda x: intercept + slope * x,
+        "alpha": float(z["alpha"]),
+        "dt": float(z["s_per_bin"]),
+        "meta": json.loads(str(z["meta"])) if "meta" in z else {},
+    }
