@@ -7,7 +7,7 @@ import pandas as pd
 
 from peaxart.config import ExtractionConfig
 from peaxart.detect import histogram_centres
-from peaxart.domain import split_into_windows
+from peaxart.rtfit import split_into_windows
 
 
 def group_compounds(

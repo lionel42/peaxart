@@ -225,3 +225,37 @@ def plot_groups(d, peaks, rejected, scans, max_groups: int | None = 8, config: E
 
 __all__ = ["STYLE", "analyse_domain", "field_figure", "group_of", "plot_field",
            "plot_group_detail", "plot_groups", "plot_mass_fit"]
+
+
+PEAK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+"""Default colors of the peaks of :func:`plot_integration`, in rt order (a categorical
+palette checked for colour vision deficiencies; give ``colors`` to keep a compound's colour)."""
+
+
+def plot_integration(ax, t, y, peaks, method, title: str | None = None, xlim=None, label_areas: bool = True,
+                     colors=None):
+    """A chromatogram and the peaks integrated by a :class:`peaxart.chromatogram.Method`:
+    the area of each peak is filled (see :meth:`~peaxart.chromatogram.Method.bands`)
+    and given in the legend (``label_areas``).
+
+    :param colors: color of each peak (rows of ``peaks``), default :data:`PEAK_COLORS` in order.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(y, dtype=float)
+    colors = [PEAK_COLORS[k % len(PEAK_COLORS)] for k in range(len(peaks))] if colors is None else list(colors)
+    shown = np.ones(len(t), bool) if xlim is None else (t >= xlim[0]) & (t <= xlim[1])
+    ax.plot(t[shown], y[shown], color=INK, lw=1)
+    for (lower, upper), p, color in zip(method.bands(t, y, peaks), peaks.itertuples(), colors):
+        if xlim is not None and not xlim[0] <= p.rt <= xlim[1]:
+            continue
+        area = "NaN" if not np.isfinite(p.area) else f"{p.area:.3g}"
+        ax.fill_between(t[shown], lower[shown], upper[shown], color=color, alpha=0.3, lw=0,
+                        label=f"{p.rt:.1f} s: {area}")
+        ax.plot(t[shown], upper[shown], color=color, lw=1.5)
+        ax.plot(t[shown], lower[shown], color=color, lw=1, ls="--")
+    if label_areas and ax.get_legend_handles_labels()[0]:
+        ax.legend(title="rt: area", fontsize=7, title_fontsize=7, frameon=False, loc="upper right")
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    ax.set_xlabel("rt (s)")
+    ax.set_title(title or method.name)
