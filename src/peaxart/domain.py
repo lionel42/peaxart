@@ -339,7 +339,8 @@ def _try_extra_peak(fitted, t, y, dt, rt_sigma, config, run_fit):
         in the data, else None.
     """
     resid = y - _model(fitted, t, config.convention)
-    width = max(3, int(round(rt_sigma / dt)))
+    # not wider than the data: np.convolve(mode="same") returns max(len(t), width) values
+    width = min(len(t), max(3, int(round(rt_sigma / dt))))
     smooth = np.convolve(resid, np.ones(width) / width, mode="same")
     i = int(np.argmax(smooth))
     if smooth[i] <= 0 or len(t) <= 1 + 4 * (len(fitted) + 1):
