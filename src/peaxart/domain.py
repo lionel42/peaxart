@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
 
 from peaxart.config import ExtractionConfig
-from peaxart.detect import histogram_centres, peak_detect
+from peaxart.detect import histogram_centres
 from peaxart.mzfit import detect_mass_peaks, fit_spectrum
-from peaxart.rtfit import fit_chromato, rt_outliers
-from peaxart.shapes import chromato
+from peaxart.rtfit import fit_series, rt_outliers
 
 logger = logging.getLogger(__name__)
 
@@ -33,24 +31,6 @@ REJECTED_COLUMNS = [
 
 def _empty() -> pd.DataFrame:
     return pd.DataFrame({c: pd.Series(dtype=float) for c in PEAK_COLUMNS})
-
-
-def split_into_windows(start_idx: float, stop_idx: float, dt: float, n_max: float,
-                       window: float, edge: float) -> list[tuple[float, float]]:
-    """Split an rt index range into windows of ~``window`` s overlapping by ``edge`` (legacy)."""
-    if stop_idx - start_idx > 1.2 * (window + 2 * edge) / dt:
-        n_windows = int(round((stop_idx - start_idx) / (window / dt)))
-        duration = int(round(stop_idx - start_idx) / n_windows)
-        edge_idx = math.ceil(edge / dt)
-        start_edge = max(0, start_idx - edge_idx)
-        stop_edge = min(n_max - 1, stop_idx + edge_idx)
-        out = [
-            [start_edge + duration * i, start_edge + duration * (i + 1) + 2 * edge_idx]
-            for i in range(n_windows)
-        ]
-        out[-1][1] = stop_edge
-        return [tuple(w) for w in out]
-    return [(start_idx, stop_idx)]
 
 
 def interp_mz(xq, x, mz_row):
@@ -256,160 +236,11 @@ def extract_domain(
                 continue
         g_rt, g_area = scans["rt"][idx], scans["area"][idx]
         g_x, g_mz = scans["x"][idx], scans["mz"][idx]
-        rt_bins = g_rt / dt
-        for w_start, w_stop in split_into_windows(rt_bins[0], rt_bins[-1], dt, np.inf,
-                                                  config.rt_window, config.rt_window_edge):
-            # as the legacy code: the window end is excluded
-            sel = np.flatnonzero((rt_bins >= w_start) & (rt_bins < w_stop))
-            if len(sel) <= config.min_points + 1:
-                continue
-            w_rt, w_area, w_x, w_mz = g_rt[sel], g_area[sel], g_x[sel], g_mz[sel]
-            rt_sigma = config.rt_sigma_at((w_start + w_stop) / 2 * dt)
-            pw = max(3, 3.0 * rt_sigma)
-            pt = 40.0 / pw
-            grid = np.arange(int((w_rt[0] - pw) / dt), int((w_rt[-1] + pw) / dt))
-            detected = peak_detect(grid * dt, np.interp(grid, w_rt / dt, w_area), pw, pt, dt)
-            # not more parameters than points: drop the smallest peaks
-            while len(detected) > 0 and len(sel) < 1 + len(detected) * config.min_points:
-                detected = detected[detected[:, 1] > detected[:, 1].min()]
-            if len(detected) == 0:
-                continue
-            in_window = (detected[:, 0] >= w_start * dt) & (detected[:, 0] < w_stop * dt)
-            if not in_window.any():
-                continue
-            base = histogram_centres(np.sort(w_area), 15, 5, 0.01, 1)
-            baseline_guess = float(base.min()) if len(base) else float(w_area.min())
-            window_rejected: list[dict] = []
-
-            def run_fit(mu_guess, apex_guess, base_guess, rejected_list, position_bound=config.rt_position_bound):
-                return fit_chromato(
-                    w_rt, w_area, mu_guess, apex_guess, base_guess, dt, rt_sigma,
-                    (w_start * dt, w_stop * dt), w_x, w_mz, config.conf_int, config.rt_peak_broadness,
-                    config.ratio_to_linear_fit, position_bound, config.convention,
-                    config.legacy_numerics, config.peak_linear_ratio, config.peak_min_coverage,
-                    rejected=rejected_list, on_abort=config.on_abort,
-                )
-
-            fitted = run_fit(detected[:, 0], detected[:, 1], baseline_guess, window_rejected)
-            # Try one more peak where the residual is largest (coeluting peaks closer
-            # than the detection window); keep it only if the fit is clearly better.
-            for _ in range(config.rt_extra_peaks):
-                if fitted is None:
-                    break
-                trial = _try_extra_peak(fitted, w_rt, w_area, dt, rt_sigma, config, run_fit)
-                if trial is None:
-                    break
-                fitted, window_rejected = trial
-            rejected.extend(r for r in window_rejected if w_start * dt <= r["rt"] < w_stop * dt)
-            if fitted is None:
-                continue
-            for k in range(len(fitted)):
-                if not (w_start * dt <= fitted.rt[k] < w_stop * dt):
-                    continue
-                rows.append(_row(fitted, k, sigma_of_x, alpha, x, mz, rt))
+        for fitted, k in fit_series(g_rt, g_area, dt, config, g_x, g_mz, rejected=rejected):
+            rows.append(_row(fitted, k, sigma_of_x, alpha, x, mz, rt))
     if not rows:
         return result(_empty())
     return result(pd.DataFrame(rows, columns=PEAK_COLUMNS))
-
-
-def _model(f, t, convention):
-    """Baseline + sum of the fitted chromatographic peaks at times ``t``."""
-    out = np.full(len(t), f.baseline)
-    for k in range(len(f)):
-        out = out + chromato(t, f.height[k], f.rt[k], f.sigma[k], f.tailing[k], convention)
-    return out
-
-
-def _residual_std(f, t, y, convention) -> float:
-    """Residual standard deviation corrected for the 1 + 4 n parameters."""
-    dof = len(t) - (1 + 4 * len(f))
-    if dof <= 0:
-        return np.inf
-    return float(np.sqrt(np.sum((y - _model(f, t, convention)) ** 2) / dof))
-
-
-def _try_extra_peak(fitted, t, y, dt, rt_sigma, config, run_fit):
-    """Refit with one more peak at the largest (smoothed) residual.
-
-    :return: (the new fit, its rejected candidates) if it keeps more peaks, its residual std (corrected
-        for the number of parameters) is below ``rt_extra_peak_ratio`` times the
-        current one, and the added peak is at least ``rt_extra_peak_min_height``
-        times the highest one, ``rt_extra_peak_min_separation`` rt sigmas away
-        from the others and (``rt_extra_peak_shoulder``) makes a shoulder or a dip
-        in the data, else None.
-    """
-    resid = y - _model(fitted, t, config.convention)
-    # not wider than the data: np.convolve(mode="same") returns max(len(t), width) values
-    width = min(len(t), max(3, int(round(rt_sigma / dt))))
-    smooth = np.convolve(resid, np.ones(width) / width, mode="same")
-    i = int(np.argmax(smooth))
-    if smooth[i] <= 0 or len(t) <= 1 + 4 * (len(fitted) + 1):
-        return None
-    # the current peak nearest to the new one, and where it would start if it is moved
-    # (see below): two coeluting peaks would be at about these two positions
-    bound = max(3 * dt, rt_sigma) if config.rt_position_bound is None else config.rt_position_bound
-    near = int(np.argmin(np.abs(fitted.rt - t[i])))
-    moved = fitted.rt.copy()
-    moved[near] -= np.clip((t[i] - moved[near]) / 2, -bound, bound)
-    smoothing = max(2, width // 2)
-    if config.rt_extra_peak_shoulder and _curvature_sign_changes(t, y, dt, moved[near], t[i], smoothing) < 2:
-        return None  # no shoulder: not worth the fits (checked again on the fitted positions)
-    # start height of the new peak: the (smoothed) data, the residual underestimates
-    # it when the current peak covers both compounds
-    data = np.convolve(y, np.ones(width) / width, mode="same")
-    apex = np.append(fitted.height + fitted.baseline, max(fitted.baseline + smooth[i], data[i]))
-    # two starts: the current peaks unchanged, and the nearest one moved away from
-    # the new one by half their distance (one peak fitted to two coeluting ones sits
-    # between them); the better fit is kept. The peaks may move by up to one rt
-    # sigma (the normal bound, 3 scans, keeps the current peak where it is).
-    starts = [fitted.rt] if np.array_equal(moved, fitted.rt) else [fitted.rt, moved]
-    trial, trial_std, trial_rejected = None, np.inf, []
-    for start in starts:
-        start_rejected: list[dict] = []
-        f = run_fit(np.append(start, t[i]), apex, fitted.baseline, start_rejected, position_bound=bound)
-        if f is not None and len(f) > len(fitted):
-            std = _residual_std(f, t, y, config.convention)
-            if std < trial_std:
-                trial, trial_std, trial_rejected = f, std, start_rejected
-    if trial is None:
-        return None
-    # the added peak: the one of the trial farthest from all the current ones
-    added = np.argmax([np.min(np.abs(fitted.rt - r)) for r in trial.rt])
-    if trial.height[added] < config.rt_extra_peak_min_height * trial.height.max():
-        return None
-    others = np.arange(len(trial)) != added
-    distance = np.abs(trial.rt[others] - trial.rt[added])
-    if np.any(distance < config.rt_extra_peak_min_separation * np.maximum(trial.sigma[others], trial.sigma[added])):
-        return None
-    if config.rt_extra_peak_shoulder:
-        nearest = np.flatnonzero(others)[np.argmin(distance)]
-        if _curvature_sign_changes(t, y, dt, trial.rt[nearest], trial.rt[added], smoothing) < 2:
-            return None
-    if trial_std > config.rt_extra_peak_ratio * _residual_std(fitted, t, y, config.convention):
-        return None
-    return trial, trial_rejected
-
-
-def _curvature_sign_changes(t, y, dt, a, b, width) -> int:
-    """Number of sign changes of the curvature of y between t = a and t = b.
-
-    y is put on a regular grid of step dt (summed per scan, interpolated over the
-    missing scans) and smoothed twice by a moving average of ``width`` points.
-    """
-    scans = np.round((np.asarray(t) - t[0]) / dt).astype(int)
-    summed = np.bincount(scans, weights=y)
-    present = np.bincount(scans) > 0
-    grid = np.arange(len(summed))
-    regular = np.interp(grid, grid[present], summed[present])
-    kernel = np.ones(width) / width
-    smooth = np.convolve(np.convolve(regular, kernel, mode="same"), kernel, mode="same")
-    curvature = np.sign(np.diff(smooth, 2))  # at grid points 1 .. n-2
-    lo, hi = sorted([a, b])
-    i0 = max(0, int(np.ceil((lo - t[0]) / dt)) - 1)
-    i1 = int(np.floor((hi - t[0]) / dt)) - 1
-    signs = curvature[i0 : i1 + 1]
-    signs = signs[signs != 0]
-    return int(np.sum(signs[1:] != signs[:-1]))
 
 
 def _row(f, k, sigma_of_x, alpha, x, mz, rt) -> dict:
