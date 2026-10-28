@@ -73,6 +73,36 @@ def chromato(x, height, mu, sigma, tailing, convention: str = STANDARD):
     return out
 
 
+def chromato_jac(x, height, mu, sigma, tailing, convention: str = STANDARD):
+    """:func:`chromato` and its derivatives: (value, d/dmu, d/dsigma, d/dheight, d/dtailing).
+
+    The Gaussian of a tailing below 0.01 does not depend on the tailing (derivative 0).
+    """
+    x = np.asarray(x, dtype=float)
+    f = chromato(x, height, mu, sigma, tailing, convention)
+    d = x - mu
+    if tailing <= 0.01:
+        k2 = 2.0 * sigma**2 if convention == LEGACY else sigma**2  # f = H exp(-d^2 / (2 k2))
+        shape = np.exp(-0.5 * d * d / k2)
+        return f, f * d / k2, f * d * d / (k2 * sigma), shape, np.zeros_like(x)
+    a = tailing
+    a2 = a * a
+    c = 4.0 / a2 - 1.0
+    k = 2.0 * a / (sigma * (4.0 - a2))
+    v = k * d
+    ok = v > -0.99
+    g = np.zeros_like(x)  # dE/dv / -1, with E = c (ln(1 + v) - v) the exponent
+    g[ok] = c * v[ok] / (1.0 + v[ok])
+    log_term = np.zeros_like(x)
+    log_term[ok] = np.log1p(v[ok]) - v[ok]
+    d_mu = f * g * k
+    d_sigma = f * g * v / sigma
+    d_height = np.where(ok, np.exp(c * log_term), 0.0)
+    dv_da = v * (4.0 + a2) / (a * (4.0 - a2))
+    d_tailing = f * (-8.0 / a**3 * log_term - g * dv_da)
+    return f, d_mu, d_sigma, d_height, d_tailing
+
+
 def chromato_area(height, sigma, tailing):
     """Area of :func:`chromato` (Gaussian approximation below a tailing of 0.2)."""
     if tailing > 0.2:

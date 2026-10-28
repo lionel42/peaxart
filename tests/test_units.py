@@ -8,7 +8,7 @@ from peaxart.detect import histogram_centres, peak_detect
 from peaxart.leastsq import fit
 from peaxart.mzfit import fit_spectrum
 from peaxart.rtfit import rt_outliers
-from peaxart.shapes import chromato, chromato_area, pseudo_voigt, pseudo_voigt_height
+from peaxart.shapes import chromato, chromato_area, chromato_jac, pseudo_voigt, pseudo_voigt_height
 
 
 def test_peak_detect_finds_peaks():
@@ -43,6 +43,41 @@ def test_chromato_area(tailing):
     assert y.max() == pytest.approx(3.0, rel=1e-3)
     if tailing > 0.2 or tailing <= 0.01:
         assert np.trapezoid(y, x) == pytest.approx(chromato_area(3.0, 2.0, tailing), rel=1e-3)
+
+
+@pytest.mark.parametrize("convention", ["standard", "legacy"])
+@pytest.mark.parametrize("tailing", [0.005, 0.3, 1.2])
+def test_chromato_jac(convention, tailing):
+    x = np.linspace(0, 40, 400)
+    p = np.array([1e4, 15.0, 1.4, tailing])  # height, mu, sigma, tailing
+    value, *jac = chromato_jac(x, *p, convention=convention)
+    np.testing.assert_array_equal(value, chromato(x, *p, convention=convention))
+    for derivative, i in zip(jac, [1, 2, 0, 3]):  # d/dmu, d/dsigma, d/dheight, d/dtailing
+        h = 1e-6 * max(abs(p[i]), 1.0)
+        up, down = p.copy(), p.copy()
+        up[i] += h
+        down[i] -= h
+        if i == 3 and tailing <= 0.01:
+            continue  # the Gaussian branch ignores the tailing
+        numeric = (chromato(x, *up, convention=convention) - chromato(x, *down, convention=convention)) / (2 * h)
+        np.testing.assert_allclose(derivative, numeric, atol=1e-6 * np.abs(numeric).max())
+
+
+def test_max_iterations_with_jacobian():
+    # with the Jacobian, an iteration costs one evaluation of the residual
+    x = np.linspace(0, 10, 50)
+    y = 3.0 * np.exp(-((x - 4.0) ** 2) / 2.0)
+
+    def residual(p):
+        return p[0] * np.exp(-((x - p[1]) ** 2) / 2.0) - y
+
+    def jac(p):
+        g = np.exp(-((x - p[1]) ** 2) / 2.0)
+        return np.column_stack([g, p[0] * g * (x - p[1])])
+
+    r = fit(residual, [1.0, 6.0], jac=jac, max_iterations=3)
+    assert r.aborted and r.nfev == 4
+    assert fit(residual, [1.0, 6.0], jac=jac).params == pytest.approx([3.0, 4.0])
 
 
 def test_bounded_fit():
