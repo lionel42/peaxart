@@ -114,8 +114,8 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
         False is faster and differs only by rounding.
     :param max_iterations: the fit stops after ``max_iterations * (n + 1)``
         evaluations of the residual (n fitted parameters; with finite
-        differences one iteration costs n + 1 evaluations). 2000 is the lmfit
-        default. None: no limit.
+        differences one iteration costs n + 1 evaluations), ``max_iterations``
+        with ``jac``. 2000 is the lmfit default. None: no limit.
     :param on_abort: the parameters returned when the fit is stopped by
         ``max_iterations``: ``"best"`` (lowest sum of squares evaluated) or
         ``"last"`` (the last evaluated, as lmfit).
@@ -156,7 +156,9 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
     if on_abort not in ("best", "last"):
         raise ValueError(f"on_abort must be 'best' or 'last', not {on_abort!r}")
     keep_best = on_abort == "best"
-    max_nfev = (max_iterations if max_iterations is not None else 10**9) * (len(iv) + 1)
+    # one iteration costs n + 1 evaluations with finite differences, one with the Jacobian
+    per_iteration = 1 if jac is not None else len(iv) + 1
+    max_nfev = (max_iterations if max_iterations is not None else 10**9) * per_iteration
     state = {"nfev": 0, "last": None, "best": None, "best_ssr": np.inf}
 
     class _Abort(Exception):

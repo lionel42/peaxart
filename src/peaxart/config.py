@@ -29,8 +29,12 @@ class ExtractionConfig:
     max_iterations: int | None = 100
     """Maximal number of Levenberg-Marquardt iterations of a per-scan mass fit (then the
     fit stops and keeps the parameters chosen by ``on_abort``). Spectra with many weak peaks can otherwise
-    take thousands of iterations. The rt fits keep the lmfit limit (2000), they need
-    more iterations. The legacy code (lmfit) used 2000."""
+    take thousands of iterations. The rt fits have their own limit (``rt_max_iterations``).
+    The legacy code (lmfit) used 2000."""
+    rt_max_iterations: int | None = 2000
+    """Iteration limit of an rt fit (the lmfit default). A few ill-conditioned fits (weak or
+    unresolved peaks) run to it and then take most of the time: a lower limit (e.g. 200)
+    makes a whole chromatogram several times faster."""
     on_abort: str = "best"
     """Parameters kept when a fit (mass or rt) is stopped by its iteration limit:
     ``"best"`` found so far, or ``"last"`` evaluated, as lmfit (legacy)."""

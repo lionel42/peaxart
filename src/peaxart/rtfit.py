@@ -20,7 +20,7 @@ from scipy.stats import t as student_t
 from peaxart.config import ExtractionConfig
 from peaxart.detect import histogram_centres, peak_detect
 from peaxart.leastsq import fit
-from peaxart.shapes import chromato, chromato_area
+from peaxart.shapes import chromato, chromato_area, chromato_jac
 
 
 @dataclass
@@ -239,7 +239,19 @@ def fit_chromato(
                      for i in range(n_peaks)]
             return p[0] + np.sum(peaks, axis=0) - y
 
-        res = fit(residual, p0, lo, hi, exact=legacy_numerics, max_iterations=max_iterations, on_abort=on_abort)
+        jac = None
+        if not legacy_numerics:
+            def jac(p, n_peaks=n_peaks):
+                out = np.empty((len(x), 1 + 4 * n_peaks))
+                out[:, 0] = 1.0
+                for i in range(n_peaks):
+                    _, d_mu, d_sigma, d_height, d_tailing = chromato_jac(
+                        x, p[3 + 4 * i], p[1 + 4 * i], p[2 + 4 * i], p[4 + 4 * i], convention)
+                    out[:, 1 + 4 * i:5 + 4 * i] = np.column_stack([d_mu, d_sigma, d_height, d_tailing])
+                return out
+
+        res = fit(residual, p0, lo, hi, jac=jac, exact=legacy_numerics, max_iterations=max_iterations,
+                  on_abort=on_abort)
         params = res.params
         baseline = params[0]
         mu = params[1::4][:n_peaks]
@@ -438,7 +450,7 @@ def fit_series(
                 (w_start * dt, w_stop * dt), w_x, w_mz, config.conf_int, config.rt_peak_broadness,
                 config.ratio_to_linear_fit, position_bound, config.convention,
                 config.legacy_numerics, config.peak_linear_ratio, config.peak_min_coverage,
-                rejected=rejected_list, on_abort=config.on_abort,
+                rejected=rejected_list, max_iterations=config.rt_max_iterations, on_abort=config.on_abort,
             )
 
         fitted = run_fit(detected[:, 0], detected[:, 1], base_guess, window_rejected)
