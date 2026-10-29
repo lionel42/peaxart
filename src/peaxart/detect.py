@@ -54,8 +54,8 @@ def peak_detect(x: np.ndarray, y: np.ndarray, pw: float, pt: float, n_per_bin: f
     slope = (sxy - sx * sy / n) / den if den != 0 else np.zeros(m)
 
     table = np.zeros((m, 4))
-    table[:, 0] = x[n // 2: n // 2 + m]
-    table[:, 1] = y[n // 2: n // 2 + m]
+    table[:, 0] = x[n // 2 : n // 2 + m]
+    table[:, 1] = y[n // 2 : n // 2 + m]
     table[:, 2] = slope
     s0, s1 = slope[:-1], slope[1:]
     table[:-1, 3] = np.where((s0 > 0) & (s1 <= 0), 1.0, np.where((s0 < 0) & (s1 >= 0), -1.0, 0.0))
@@ -71,14 +71,14 @@ def peak_detect(x: np.ndarray, y: np.ndarray, pw: float, pt: float, n_per_bin: f
         else:
             idx_start = min(int(peak_idx[idx_p - 1] + 1), m - 2)
             idx_stop = m - 1 if idx_p == len(peak_idx) - 1 else int(peak_idx[idx_p + 1] + 1)
-        slope_max = table[idx_start: idx_peak + 1, 2].max()
-        slope_min = table[idx_peak: idx_stop, 2].min()
+        slope_max = table[idx_start : idx_peak + 1, 2].max()
+        slope_min = table[idx_peak:idx_stop, 2].min()
         if max(slope_max, abs(slope_min)) >= pt:
             if idx_peak + 1 < m:
                 table[idx_peak, 0] = table[idx_peak, 0] - table[idx_peak, 2] * (
                     table[idx_peak + 1, 0] - table[idx_peak, 0]
                 ) / (table[idx_peak + 1, 2] - table[idx_peak, 2])
-            table[idx_peak, 1] = table[max(0, idx_peak - 1): min(idx_peak + 1, m - 1), 1].max()
+            table[idx_peak, 1] = table[max(0, idx_peak - 1) : min(idx_peak + 1, m - 1), 1].max()
             idx_p += 1
         else:
             table[idx_peak, 3] = 0
@@ -90,9 +90,7 @@ def peak_detect(x: np.ndarray, y: np.ndarray, pw: float, pt: float, n_per_bin: f
     return table[table[:, 3] > 0, :2].copy()
 
 
-def histogram_centres(
-    values: np.ndarray, delta_bin: float, pw: float, pt: float, n_per_bin: float
-) -> np.ndarray:
+def histogram_centres(values: np.ndarray, delta_bin: float, pw: float, pt: float, n_per_bin: float) -> np.ndarray:
     """Centres of the groups of ``values`` (legacy ``find_bins_np``).
 
     A histogram of bin width ``delta_bin`` is made over the range of the values

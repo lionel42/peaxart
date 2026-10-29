@@ -21,7 +21,7 @@ Quick start::
 """
 
 from peaxart.api import domain_slices, extract
-from peaxart.chromatogram import METHODS, FixedShapes, Fit, Method, Trapezoid, detect_peaks, integrate
+from peaxart.chromatogram import METHODS, Fit, FixedShapes, Method, Trapezoid, detect_peaks, integrate
 from peaxart.compounds import group_compounds
 from peaxart.config import ExtractionConfig
 from peaxart.domain import PEAK_COLUMNS, extract_domain

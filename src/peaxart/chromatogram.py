@@ -146,8 +146,9 @@ class Trapezoid(Method):
     peak) within ``rt_sigma / 2``. On each side, the peak ends at the first minimum
     of the signal smoothed over ``rt_sigma / 2`` that is deep (below half the peak)
     or before another of the peaks (a valley or the start of the baseline; the
-    maxima of peaks not in the list are passed over, up to 6 rt sigma), and at most ``n_hwhm`` half widths from the apex (half maximum
-    between the apex and the lower end). The baseline joins the signal at the two bounds.
+    maxima of peaks not in the list are passed over, up to 6 rt sigma), and at most
+    ``n_hwhm`` half widths from the apex (half maximum between the apex and the lower end).
+    The baseline joins the signal at the two bounds.
 
     With ``split_at_valley``, peaks whose bounds overlap form a cluster: one
     baseline joins the signal at the outer bounds of the cluster, and the peaks
@@ -161,8 +162,14 @@ class Trapezoid(Method):
     name = "trapezoid"
     columns = COMMON_COLUMNS + ["start", "stop", "baseline_start", "baseline_stop", "fwhm", "prominence"]
 
-    def __init__(self, n_hwhm: float = 3.0, split_at_valley: bool = True, rt_sigma: float | None = None,
-                 k: float = 5.0, config: ExtractionConfig | None = None):
+    def __init__(
+        self,
+        n_hwhm: float = 3.0,
+        split_at_valley: bool = True,
+        rt_sigma: float | None = None,
+        k: float = 5.0,
+        config: ExtractionConfig | None = None,
+    ):
         """
         :param rt_sigma: expected rt sigma (s), default ``config.rt_sigma_at`` the centre of the chromatogram.
         :param k: threshold of the peak detection (noise standard deviations of the slope).
@@ -186,7 +193,7 @@ class Trapezoid(Method):
         apexes = []
         for g in guesses:
             i = int(np.clip(np.searchsorted(t, g), 0, len(t) - 1))
-            maxima = np.flatnonzero(is_max[max(0, i - half): i + half + 1]) + max(0, i - half)
+            maxima = np.flatnonzero(is_max[max(0, i - half) : i + half + 1]) + max(0, i - half)
             apexes.append(maxima[np.argmin(np.abs(t[maxima] - g))] if len(maxima) else i)
         apex = np.unique(apexes)
         with warnings.catch_warnings():
@@ -206,8 +213,8 @@ class Trapezoid(Method):
         left_end = np.minimum(_walk_down(smooth, apex, -1, width // 2, apex[ok], max_steps), apex)
         right_end = np.maximum(_walk_down(smooth, apex, 1, width // 2, apex[ok], max_steps), apex)
         half_max = (y[apex] + np.minimum(y[left_end], y[right_end])) / 2
-        left_hm = np.array([_crossing(t, y, a, e, h) for a, e, h in zip(apex, left_end, half_max)])
-        right_hm = np.array([_crossing(t, y, a, e, h) for a, e, h in zip(apex, right_end, half_max)])
+        left_hm = np.array([_crossing(t, y, a, e, h) for a, e, h in zip(apex, left_end, half_max, strict=True)])
+        right_hm = np.array([_crossing(t, y, a, e, h) for a, e, h in zip(apex, right_end, half_max, strict=True)])
         rt_apex = t[apex]
         start = np.maximum(rt_apex - self.n_hwhm * (rt_apex - left_hm), t[left_end])
         stop = np.minimum(rt_apex + self.n_hwhm * (right_hm - rt_apex), t[right_end])
@@ -224,8 +231,8 @@ class Trapezoid(Method):
             for c in clusters:
                 c_start, c_stop = min(start[c]), max(stop[c])
                 base_start[c], base_stop[c] = c_start, c_stop
-                for i, j in zip(c[:-1], c[1:]):
-                    valley = t[apex[i] + int(np.argmin(y[apex[i]: apex[j] + 1]))]
+                for i, j in zip(c[:-1], c[1:], strict=True):
+                    valley = t[apex[i] + int(np.argmin(y[apex[i] : apex[j] + 1]))]
                     stop[i], start[j] = valley, valley
                 start[c[0]], stop[c[-1]] = c_start, c_stop
         rows = []
@@ -248,11 +255,19 @@ class Trapezoid(Method):
                 den = y[a - 1] - 2 * y[a] + y[a + 1]
                 if den < 0:
                     r = t[a] + 0.5 * (y[a - 1] - y[a + 1]) / den * dt
-            rows.append({
-                "rt": r, "height": y[a] - baseline(r), "area": area, "start": start[i], "stop": stop[i],
-                "baseline_start": baseline(start[i]), "baseline_stop": baseline(stop[i]),
-                "fwhm": right_hm[i] - left_hm[i], "prominence": prom[i],
-            })
+            rows.append(
+                {
+                    "rt": r,
+                    "height": y[a] - baseline(r),
+                    "area": area,
+                    "start": start[i],
+                    "stop": stop[i],
+                    "baseline_start": baseline(start[i]),
+                    "baseline_stop": baseline(stop[i]),
+                    "fwhm": right_hm[i] - left_hm[i],
+                    "prominence": prom[i],
+                }
+            )
         return pd.DataFrame(rows, columns=self.columns)
 
     def bands(self, t, y, peaks):
@@ -284,7 +299,15 @@ class Fit(Method):
 
     name = "fit"
     columns = COMMON_COLUMNS + [
-        "rt_u", "height_u", "area_u", "rt_sigma", "rt_tailing", "lod", "sn", "linear_ratio", "baseline",
+        "rt_u",
+        "height_u",
+        "area_u",
+        "rt_sigma",
+        "rt_tailing",
+        "lod",
+        "sn",
+        "linear_ratio",
+        "baseline",
     ]
 
     def __init__(self, config: ExtractionConfig | None = None, k: float = 5.0):
@@ -314,12 +337,22 @@ class Fit(Method):
         rows = []
         for f, k in fitted:
             rel_u = f.height_u[k] / f.height[k] if f.height[k] else np.nan
-            rows.append({
-                "rt": f.rt[k], "height": f.height[k], "area": f.area[k], "rt_u": f.rt_u[k],
-                "height_u": f.height_u[k], "area_u": f.area[k] * rel_u, "rt_sigma": f.sigma[k],
-                "rt_tailing": f.tailing[k], "lod": f.lod[k], "sn": f.sn[k], "linear_ratio": f.linear_ratio[k],
-                "baseline": f.baseline,
-            })
+            rows.append(
+                {
+                    "rt": f.rt[k],
+                    "height": f.height[k],
+                    "area": f.area[k],
+                    "rt_u": f.rt_u[k],
+                    "height_u": f.height_u[k],
+                    "area_u": f.area[k] * rel_u,
+                    "rt_sigma": f.sigma[k],
+                    "rt_tailing": f.tailing[k],
+                    "lod": f.lod[k],
+                    "sn": f.sn[k],
+                    "linear_ratio": f.linear_ratio[k],
+                    "baseline": f.baseline,
+                }
+            )
         if not rows:
             return self._empty()
         return pd.DataFrame(rows, columns=self.columns).sort_values("rt", ignore_index=True)
@@ -344,11 +377,19 @@ class FixedShapes(Method):
     """
 
     name = "fixed_shapes"
-    columns = COMMON_COLUMNS + ["height_u", "area_u", "rt_sigma", "rt_tailing", "baseline", "baseline_slope",
-                                "residual_std"]
+    columns = COMMON_COLUMNS + [
+        "height_u",
+        "area_u",
+        "rt_sigma",
+        "rt_tailing",
+        "baseline",
+        "baseline_slope",
+        "residual_std",
+    ]
 
-    def __init__(self, rt, rt_sigma, rt_tailing, baseline: str = "linear", support: float = 0.01,
-                 convention: str = "standard"):
+    def __init__(
+        self, rt, rt_sigma, rt_tailing, baseline: str = "linear", support: float = 0.01, convention: str = "standard"
+    ):
         """
         :param rt, rt_sigma, rt_tailing: position (s), width (s) and tailing of each peak
             (see :func:`peaxart.shapes.chromato`).
@@ -371,8 +412,12 @@ class FixedShapes(Method):
     def profiles(self, t) -> np.ndarray:
         """(n_peaks, len(t)) peaks of height 1."""
         t = np.asarray(t, dtype=float)
-        return np.array([chromato(t, 1.0, r, s, a, self.convention)
-                         for r, s, a in zip(self.rt, self.rt_sigma, self.rt_tailing)]).reshape(len(self.rt), len(t))
+        return np.array(
+            [
+                chromato(t, 1.0, r, s, a, self.convention)
+                for r, s, a in zip(self.rt, self.rt_sigma, self.rt_tailing, strict=True)
+            ]
+        ).reshape(len(self.rt), len(t))
 
     def integrate(self, t, y, rt=None) -> pd.DataFrame:
         if rt is not None:
@@ -401,12 +446,22 @@ class FixedShapes(Method):
         p_u = np.sqrt(np.clip(np.diag(cov), 0, None))
         b0 = p[n] if self.baseline != "none" else 0.0
         b1 = p[n + 1] if self.baseline == "linear" else 0.0
-        unit_area = np.array([chromato_area(1.0, s, a) for s, a in zip(self.rt_sigma, self.rt_tailing)])
-        out = pd.DataFrame({
-            "rt": self.rt, "height": p[:n], "area": p[:n] * unit_area, "height_u": p_u[:n],
-            "area_u": p_u[:n] * unit_area, "rt_sigma": self.rt_sigma, "rt_tailing": self.rt_tailing,
-            "baseline": b0 + b1 * (self.rt - t_ref), "baseline_slope": b1, "residual_std": residual_std,
-        }, columns=self.columns)
+        unit_area = np.array([chromato_area(1.0, s, a) for s, a in zip(self.rt_sigma, self.rt_tailing, strict=True)])
+        out = pd.DataFrame(
+            {
+                "rt": self.rt,
+                "height": p[:n],
+                "area": p[:n] * unit_area,
+                "height_u": p_u[:n],
+                "area_u": p_u[:n] * unit_area,
+                "rt_sigma": self.rt_sigma,
+                "rt_tailing": self.rt_tailing,
+                "baseline": b0 + b1 * (self.rt - t_ref),
+                "baseline_slope": b1,
+                "residual_std": residual_std,
+            },
+            columns=self.columns,
+        )
         return out.sort_values("rt", ignore_index=True)
 
     def bands(self, t, y, peaks):

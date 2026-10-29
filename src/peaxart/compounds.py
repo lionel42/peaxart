@@ -33,8 +33,9 @@ def group_compounds(
     rt = peaks["rt"].to_numpy()
     rt_idx = np.round(rt / dt).astype(int)
     next_id = 0
-    for w_start, w_stop in split_into_windows(rt_idx.min(), rt_idx.max(), dt, np.inf,
-                                              config.rt_window, config.rt_window_edge):
+    for w_start, w_stop in split_into_windows(
+        rt_idx.min(), rt_idx.max(), dt, np.inf, config.rt_window, config.rt_window_edge
+    ):
         in_window = (rt_idx >= w_start) & (rt_idx <= w_stop)
         if in_window.sum() < min_peaks:
             continue

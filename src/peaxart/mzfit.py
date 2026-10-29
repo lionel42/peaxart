@@ -105,7 +105,7 @@ def fit_spectrum(
         baseline_hi = max(3, baseline_guess * 3, median * 3)
         # parameters: baseline, then (mu, area) for each peak
         p0, lo, hi = [baseline_guess], [baseline_lo], [baseline_hi]
-        for m, a in zip(mu_guess, area_guess):
+        for m, a in zip(mu_guess, area_guess, strict=True):
             p0 += [m, max(1.0, a)]
             lo += [m - dx * config.mz_position_bound, max(1, a * 0.1)]
             hi += [m + dx * config.mz_position_bound, max(2, a * 10.0)]
@@ -122,8 +122,16 @@ def fit_spectrum(
             res = fit(residual, p0, lo, hi, max_iterations=config.max_iterations, on_abort=config.on_abort)
         else:
             fast_residual, fast_jac = _fast_model(x, y, sigma, alphas, convention)
-            res = fit(fast_residual, p0, lo, hi, jac=fast_jac, exact=False, max_iterations=config.max_iterations,
-                      on_abort=config.on_abort)
+            res = fit(
+                fast_residual,
+                p0,
+                lo,
+                hi,
+                jac=fast_jac,
+                exact=False,
+                max_iterations=config.max_iterations,
+                on_abort=config.on_abort,
+            )
         baseline = res.params[0]
         mu = res.params[1::2]
         area = res.params[2::2]

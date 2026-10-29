@@ -52,7 +52,7 @@ def test_chromato_jac(convention, tailing):
     p = np.array([1e4, 15.0, 1.4, tailing])  # height, mu, sigma, tailing
     value, *jac = chromato_jac(x, *p, convention=convention)
     np.testing.assert_array_equal(value, chromato(x, *p, convention=convention))
-    for derivative, i in zip(jac, [1, 2, 0, 3]):  # d/dmu, d/dsigma, d/dheight, d/dtailing
+    for derivative, i in zip(jac, [1, 2, 0, 3], strict=True):  # d/dmu, d/dsigma, d/dheight, d/dtailing
         h = 1e-6 * max(abs(p[i]), 1.0)
         up, down = p.copy(), p.copy()
         up[i] += h
@@ -116,10 +116,14 @@ def test_fit_on_abort():
 def test_fit_spectrum_recovers_peaks():
     x = np.arange(1000.0, 1080.0)
     sigma, alpha = 0.9, 0.5
-    y = (2.0 + pseudo_voigt(x, 500.0, 1030.3, sigma, alpha, "legacy")
-         + pseudo_voigt(x, 200.0, 1050.7, sigma, alpha, "legacy")).astype(np.float32)
-    r = fit_spectrum(x, y, np.array([1030.0, 1051.0]), np.array([y[30], y[51]]), lambda m: sigma, alpha, 1.0,
-                     ExtractionConfig())
+    y = (
+        2.0
+        + pseudo_voigt(x, 500.0, 1030.3, sigma, alpha, "legacy")
+        + pseudo_voigt(x, 200.0, 1050.7, sigma, alpha, "legacy")
+    ).astype(np.float32)
+    r = fit_spectrum(
+        x, y, np.array([1030.0, 1051.0]), np.array([y[30], y[51]]), lambda m: sigma, alpha, 1.0, ExtractionConfig()
+    )
     np.testing.assert_allclose(r.mu, [1030.3, 1050.7], atol=1e-3)
     np.testing.assert_allclose(r.area, [500.0, 200.0], rtol=1e-3)
 
@@ -133,9 +137,9 @@ def synthetic(n_scans=60, mz0=69.0, rt0=1605.0):
     sigma, alpha = 0.9, 0.5
     profile = chromato(rt, 1.0, rt0, 1.5, 0.3, "legacy")
     rng = np.random.default_rng(0)
-    intensity = np.array([
-        1.0 + pseudo_voigt(x, 4000.0 * h, x_peak, sigma, alpha, "legacy") for h in profile
-    ]) + rng.normal(0, 0.3, (n_scans, len(x)))
+    intensity = np.array(
+        [1.0 + pseudo_voigt(x, 4000.0 * h, x_peak, sigma, alpha, "legacy") for h in profile]
+    ) + rng.normal(0, 0.3, (n_scans, len(x)))
     return intensity.astype(np.float32), rt, x, mz_axis, sigma, alpha
 
 
@@ -178,7 +182,10 @@ def test_outlier_scan_does_not_hide_peak():
     rng = np.random.default_rng(0)
     intensity = np.array([1.0 + pseudo_voigt(x, 100.0 * h, x_peak, sigma, alpha, "legacy") for h in profile])
     intensity = (intensity + rng.normal(0, 0.3, intensity.shape)).astype(np.float32)
-    assert len(peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x, config=ExtractionConfig(rt_outlier_k=None))) == 0
+    assert (
+        len(peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x, config=ExtractionConfig(rt_outlier_k=None)))
+        == 0
+    )
     df, _, scans = peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x, return_rejected=True, return_scans=True)
     assert len(df) == 1 and df["rt"].iloc[0] == pytest.approx(1605.0, abs=0.05)
     assert df["rt_sigma"].iloc[0] == pytest.approx(1.5, abs=0.15)
@@ -231,8 +238,7 @@ def test_mass_cal_u_rule():
 def test_fast_numerics_same_peak():
     intensity, rt, x, mz, sigma, alpha = synthetic()
     exact = peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x)
-    fast = peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x,
-                                  config=ExtractionConfig(legacy_numerics=False))
+    fast = peaxart.extract_domain(intensity, rt, mz, sigma, alpha, x=x, config=ExtractionConfig(legacy_numerics=False))
     assert len(fast) == len(exact) == 1
     assert fast["mz"].iloc[0] == pytest.approx(exact["mz"].iloc[0], abs=1e-5)
     assert fast["area"].iloc[0] == pytest.approx(exact["area"].iloc[0], rel=1e-3)

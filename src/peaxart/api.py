@@ -132,8 +132,7 @@ def extract(
         _TASKS = tasks
         try:
             with ProcessPoolExecutor(n_jobs, mp_context=mp.get_context("fork")) as ex:
-                frames = list(ex.map(_run_task, range(len(tasks)),
-                                     chunksize=max(1, len(tasks) // (4 * n_jobs))))
+                frames = list(ex.map(_run_task, range(len(tasks)), chunksize=max(1, len(tasks) // (4 * n_jobs))))
         finally:
             _TASKS = []
     else:

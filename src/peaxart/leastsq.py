@@ -42,7 +42,7 @@ def _to_internal(x, lo, hi):
     rules), which matters to reproduce the legacy fits of weak peaks.
     """
     u = np.empty(len(x))
-    for i, (v, a, b) in enumerate(zip(x, lo, hi)):
+    for i, (v, a, b) in enumerate(zip(x, lo, hi, strict=True)):
         v = min(max(v, a), b)  # lmfit clips the starting values to the bounds
         if np.isinf(a) and np.isinf(b):
             u[i] = v
@@ -100,8 +100,17 @@ def _from_internal_vec(u, lo, hi):
     return x
 
 
-def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
-        max_iterations: int | None = 2000, on_abort: str = "best") -> FitResult:
+def fit(
+    residual,
+    x0,
+    lo=None,
+    hi=None,
+    vary=None,
+    jac=None,
+    exact: bool = True,
+    max_iterations: int | None = 2000,
+    on_abort: str = "best",
+) -> FitResult:
     """Minimise ``sum(residual(params)**2)`` with bounds.
 
     :param residual: function params (full vector) -> residual array.
@@ -140,7 +149,11 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
     hi_iv = [hi_raw[i] for i in iv]
     # Bounds given as float32 scalars are used as such (lmfit: max - min is
     # then computed in float32): needed to reproduce the legacy fits exactly.
-    raw = [i for i, (a, b) in enumerate(zip(lo_iv, hi_iv)) if isinstance(a, np.float32) or isinstance(b, np.float32)]
+    raw = [
+        i
+        for i, (a, b) in enumerate(zip(lo_iv, hi_iv, strict=True))
+        if isinstance(a, np.float32) or isinstance(b, np.float32)
+    ]
 
     to_external = _from_internal if exact else _from_internal_vec
 
@@ -179,14 +192,25 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
 
     dfun = None
     if jac is not None:
+
         def dfun(u):
             return np.asarray(jac(full(u)), dtype=float)[:, iv] * _gradient_scale(u, lo_v, hi_v)[None, :]
 
     u0 = _to_internal([x0_raw[i] for i in iv], [lo_raw[i] for i in iv], [hi_raw[i] for i in iv])
     try:
         u, cov, info, _, ier = leastsq(
-            fun, u0, Dfun=dfun, full_output=True, col_deriv=False, ftol=1.5e-8, xtol=1.5e-8,
-            gtol=0.0, maxfev=2 * max_nfev, epsfcn=1e-10, factor=100, diag=None,
+            fun,
+            u0,
+            Dfun=dfun,
+            full_output=True,
+            col_deriv=False,
+            ftol=1.5e-8,
+            xtol=1.5e-8,
+            gtol=0.0,
+            maxfev=2 * max_nfev,
+            epsfcn=1e-10,
+            factor=100,
+            diag=None,
         )
     except _Abort:
         u = state["best"] if keep_best and state["best"] is not None else state["last"]
@@ -194,7 +218,7 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
     params = full(u)
     res = np.asarray(residual(params), dtype=float)
     raw = list(fixed)
-    for k, i in enumerate(iv):
+    for i in iv:
         unclipped = params[i]
         if unclipped >= hi_raw[i]:
             raw[i] = hi_raw[i]
@@ -210,5 +234,12 @@ def fit(residual, x0, lo=None, hi=None, vary=None, jac=None, exact: bool = True,
         scale = _gradient_scale(u, lo_v, hi_v)
         covar = cov * redchi * np.outer(scale, scale)
         stderr[iv] = np.sqrt(np.abs(np.diag(covar)))
-    return FitResult(params=params, stderr=stderr, residual=res, success=ier in (1, 2, 3, 4), raw=raw,
-                     nfev=state["nfev"], aborted=ier == -1)
+    return FitResult(
+        params=params,
+        stderr=stderr,
+        residual=res,
+        success=ier in (1, 2, 3, 4),
+        raw=raw,
+        nfev=state["nfev"],
+        aborted=ier == -1,
+    )

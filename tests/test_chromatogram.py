@@ -100,7 +100,7 @@ def test_bands_enclose_the_area():
     t, y = chromatogram(RESOLVED, noise=0.0)
     for method in (peaxart.Trapezoid(), peaxart.Fit()):
         peaks = method.integrate(t, y, rt=[1823.2, 1826.1])
-        for (lower, upper), a in zip(method.bands(t, y, peaks), peaks["area"]):
+        for (lower, upper), a in zip(method.bands(t, y, peaks), peaks["area"], strict=True):
             inside = np.isfinite(lower)
             assert np.trapezoid(upper[inside] - lower[inside], t[inside]) == pytest.approx(a, rel=0.03)
 
@@ -108,7 +108,7 @@ def test_bands_enclose_the_area():
 @pytest.fixture(scope="module")
 def methylhexanes():
     z = np.load(EXAMPLE)
-    return z["rt"], dict(zip(z["masses"].tolist(), z["intensity"].T))
+    return z["rt"], dict(zip(z["masses"].tolist(), z["intensity"].T, strict=True))
 
 
 def window(df):

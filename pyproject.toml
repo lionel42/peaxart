@@ -33,6 +33,7 @@ Issues = "https://github.com/lionel42/peaxart/issues"
 
 [project.optional-dependencies]
 test = ["pytest"]
+dev = ["pytest", "ruff"]
 notebook = ["matplotlib", "jupyter", "nbformat", "nbclient"]
 
 [tool.hatch.version]
@@ -48,3 +49,14 @@ packages = ["src/peaxart"]
 testpaths = ["tests"]
 markers = ["slow: end-to-end checks on the example domains (run with -m slow)"]
 addopts = "-m 'not slow'"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["*.md", "notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["peaxart"]

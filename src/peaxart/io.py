@@ -11,8 +11,20 @@ import numpy as np
 import pandas as pd
 
 ALPINAC_COLUMNS = [
-    "RT", "mass", "mass_u_ppm", "mass_cal_u_ppm", "area", "area_u", "peak_width",
-    "peak_alpha", "compound_bin", "LOD", "SN", "Ionisation", "Adduct", "Spectrum_id",
+    "RT",
+    "mass",
+    "mass_u_ppm",
+    "mass_cal_u_ppm",
+    "area",
+    "area_u",
+    "peak_width",
+    "peak_alpha",
+    "compound_bin",
+    "LOD",
+    "SN",
+    "Ionisation",
+    "Adduct",
+    "Spectrum_id",
 ]
 
 
@@ -90,9 +102,18 @@ def to_alpinac(
     )
     if path is not None:
         path = Path(path)
-        formats = {"RT": "{:.2f}", "mass": "{:.7f}", "mass_u_ppm": "{:.2f}", "mass_cal_u_ppm": "{:.2f}",
-                   "area": "{:.2f}", "area_u": "{:.2f}", "peak_width": "{:.5f}", "peak_alpha": "{:.3f}",
-                   "LOD": "{:.2f}", "SN": "{:.2f}"}
+        formats = {
+            "RT": "{:.2f}",
+            "mass": "{:.7f}",
+            "mass_u_ppm": "{:.2f}",
+            "mass_cal_u_ppm": "{:.2f}",
+            "area": "{:.2f}",
+            "area_u": "{:.2f}",
+            "peak_width": "{:.5f}",
+            "peak_alpha": "{:.3f}",
+            "LOD": "{:.2f}",
+            "SN": "{:.2f}",
+        }
         with path.open("w") as f:
             f.write("# peaxart peak extraction\n")
             f.write(f"# date: {datetime.now().isoformat(timespec='seconds')}\n")
@@ -100,8 +121,13 @@ def to_alpinac(
                 f.write(f"# {k}: {v}\n")
             f.write("\t".join(ALPINAC_COLUMNS) + "\n")
             for row in out.itertuples(index=False):
-                f.write("\t".join(formats[c].format(v) if c in formats else str(v)
-                                  for c, v in zip(ALPINAC_COLUMNS, row)) + "\n")
+                f.write(
+                    "\t".join(
+                        formats[c].format(v) if c in formats else str(v)
+                        for c, v in zip(ALPINAC_COLUMNS, row, strict=True)
+                    )
+                    + "\n"
+                )
     return out
 
 

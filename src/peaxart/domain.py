@@ -16,15 +16,42 @@ from peaxart.rtfit import fit_series, rt_outliers
 logger = logging.getLogger(__name__)
 
 PEAK_COLUMNS = [
-    "rt", "rt_u", "mz", "mz_u", "mz_u_ppm", "area", "area_u", "height", "height_u",
-    "rt_sigma", "rt_tailing", "mz_sigma", "mz_alpha", "lod", "sn", "x", "x_u",
-    "linear_ratio", "coverage", "n_points", "baseline",
+    "rt",
+    "rt_u",
+    "mz",
+    "mz_u",
+    "mz_u_ppm",
+    "area",
+    "area_u",
+    "height",
+    "height_u",
+    "rt_sigma",
+    "rt_tailing",
+    "mz_sigma",
+    "mz_alpha",
+    "lod",
+    "sn",
+    "x",
+    "x_u",
+    "linear_ratio",
+    "coverage",
+    "n_points",
+    "baseline",
 ]
 """Columns of the peak table, see :func:`extract_domain`."""
 
 REJECTED_COLUMNS = [
-    "rt", "mz", "height", "rt_sigma", "rt_tailing", "baseline", "linear_ratio", "coverage",
-    "reason", "line_rt", "line",
+    "rt",
+    "mz",
+    "height",
+    "rt_sigma",
+    "rt_tailing",
+    "baseline",
+    "linear_ratio",
+    "coverage",
+    "reason",
+    "line_rt",
+    "line",
 ]
 """Columns of the table of rejected peaks, see :func:`extract_domain` (``return_rejected``)."""
 
@@ -250,10 +277,25 @@ def _row(f, k, sigma_of_x, alpha, x, mz, rt) -> dict:
     mz_sigma = (ends[1] - ends[0]) / 2
     rel_u = f.height_u[k] / f.height[k] if f.height[k] else np.nan
     return {
-        "rt": f.rt[k], "rt_u": f.rt_u[k], "mz": f.mz[k], "mz_u": f.mz_u[k],
-        "mz_u_ppm": f.mz_u[k] / f.mz[k] * 1e6, "area": f.area[k], "area_u": f.area[k] * rel_u,
-        "height": f.height[k], "height_u": f.height_u[k], "rt_sigma": f.sigma[k],
-        "rt_tailing": f.tailing[k], "mz_sigma": mz_sigma, "mz_alpha": alpha, "lod": f.lod[k],
-        "sn": f.sn[k], "x": f.x[k], "x_u": f.x_u[k], "linear_ratio": f.linear_ratio[k], "coverage": f.coverage[k],
-        "n_points": f.n_points, "baseline": f.baseline,
+        "rt": f.rt[k],
+        "rt_u": f.rt_u[k],
+        "mz": f.mz[k],
+        "mz_u": f.mz_u[k],
+        "mz_u_ppm": f.mz_u[k] / f.mz[k] * 1e6,
+        "area": f.area[k],
+        "area_u": f.area[k] * rel_u,
+        "height": f.height[k],
+        "height_u": f.height_u[k],
+        "rt_sigma": f.sigma[k],
+        "rt_tailing": f.tailing[k],
+        "mz_sigma": mz_sigma,
+        "mz_alpha": alpha,
+        "lod": f.lod[k],
+        "sn": f.sn[k],
+        "x": f.x[k],
+        "x_u": f.x_u[k],
+        "linear_ratio": f.linear_ratio[k],
+        "coverage": f.coverage[k],
+        "n_points": f.n_points,
+        "baseline": f.baseline,
     }

@@ -32,9 +32,15 @@ INK = "#333333"
 MUTED = "#8a8a8a"
 
 STYLE = {
-    "axes.spines.top": False, "axes.spines.right": False, "axes.edgecolor": MUTED,
-    "axes.labelcolor": INK, "xtick.color": MUTED, "ytick.color": MUTED,
-    "axes.titlesize": 11, "axes.titleweight": "bold", "font.size": 9,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.edgecolor": MUTED,
+    "axes.labelcolor": INK,
+    "xtick.color": MUTED,
+    "ytick.color": MUTED,
+    "axes.titlesize": 11,
+    "axes.titleweight": "bold",
+    "font.size": 9,
 }
 """Matplotlib style of the plots (``plt.rcParams.update(STYLE)``)."""
 
@@ -46,8 +52,18 @@ def analyse_domain(d: dict, config: ExtractionConfig | None = None):
         per-scan peaks (rt, x, mz, area, ...) with their m/z ``group`` (-1: none).
     """
     config = config or ExtractionConfig()
-    return extract_domain(d["intensity"], d["rt"], d["mz"], d["sigma"], d["alpha"], x=d["x"], dt=d["dt"],
-                          config=config, return_rejected=True, return_scans=True)
+    return extract_domain(
+        d["intensity"],
+        d["rt"],
+        d["mz"],
+        d["sigma"],
+        d["alpha"],
+        x=d["x"],
+        dt=d["dt"],
+        config=config,
+        return_rejected=True,
+        return_scans=True,
+    )
 
 
 def group_of(scans: dict, mz: float) -> int:
@@ -59,48 +75,67 @@ def group_of(scans: dict, mz: float) -> int:
 def plot_field(d, peaks, rejected, scans, ax_field, ax_spec, ax_chrom):
     """Signal in the rt / m/z plane with the per-scan, the extracted and the rejected peaks,
     the summed spectrum (``ax_spec``) and the summed chromatogram (``ax_chrom``)."""
-    I = np.asarray(d["intensity"], dtype=float)
-    floor = max(np.percentile(I[I > 0], 5) if (I > 0).any() else 1e-3, 1e-3)
+    intensity = np.asarray(d["intensity"], dtype=float)
+    floor = max(np.percentile(intensity[intensity > 0], 5) if (intensity > 0).any() else 1e-3, 1e-3)
     mz = np.asarray(d["mz"])
-    mz2 = mz if mz.ndim == 2 else np.broadcast_to(mz[None, :], I.shape)
-    rt2 = np.broadcast_to(d["rt"][:, None], I.shape)
-    mesh = ax_field.pcolormesh(mz2, rt2, np.clip(I, floor, None), shading="nearest",
-                               cmap=FIELD_CMAP, norm=LogNorm(vmin=floor, vmax=I.max()), rasterized=True)
+    mz2 = mz if mz.ndim == 2 else np.broadcast_to(mz[None, :], intensity.shape)
+    rt2 = np.broadcast_to(d["rt"][:, None], intensity.shape)
+    mesh = ax_field.pcolormesh(
+        mz2,
+        rt2,
+        np.clip(intensity, floor, None),
+        shading="nearest",
+        cmap=FIELD_CMAP,
+        norm=LogNorm(vmin=floor, vmax=intensity.max()),
+        rasterized=True,
+    )
     if len(scans["x"]):
         grouped = scans["group"] >= 0
-        ax_field.scatter(scans["mz"][~grouped], scans["rt"][~grouped], s=6, c=MUTED, lw=0,
-                         label="per-scan peak (not grouped)")
-        ax_field.scatter(scans["mz"][grouped], scans["rt"][grouped], s=9, c=INK, lw=0,
-                         label="per-scan peak (in an m/z group)")
+        ax_field.scatter(
+            scans["mz"][~grouped], scans["rt"][~grouped], s=6, c=MUTED, lw=0, label="per-scan peak (not grouped)"
+        )
+        ax_field.scatter(
+            scans["mz"][grouped], scans["rt"][grouped], s=9, c=INK, lw=0, label="per-scan peak (in an m/z group)"
+        )
     if len(rejected):
-        ax_field.scatter(rejected["mz"], rejected["rt"], s=70, marker="x", c=REJECTED, linewidths=2,
-                         zorder=5, label="rejected candidate")
+        ax_field.scatter(
+            rejected["mz"],
+            rejected["rt"],
+            s=70,
+            marker="x",
+            c=REJECTED,
+            linewidths=2,
+            zorder=5,
+            label="rejected candidate",
+        )
     # labels of peaks close in rt alternate between right and left of the marker
     placed = []
     for _, p in peaks.sort_values("rt").iterrows():
-        ax_field.scatter(p["mz"], p["rt"], s=110, marker="o", facecolor="none",
-                         edgecolor=ACCENT, linewidth=2, zorder=5)
+        ax_field.scatter(p["mz"], p["rt"], s=110, marker="o", facecolor="none", edgecolor=ACCENT, linewidth=2, zorder=5)
         near = [side for rt0, side in placed if abs(rt0 - p["rt"]) < 1.0]
         side = -1 if near and near[-1] == 1 else 1
         placed.append((p["rt"], side))
-        ax_field.annotate(f"m/z {p['mz']:.4f}\nrt {p['rt']:.2f} s, S/N {p['sn']:.1f}",
-                          (p["mz"], p["rt"]), xytext=(10 * side, 6 if side > 0 else -22),
-                          textcoords="offset points", ha="left" if side > 0 else "right",
-                          color=INK, fontsize=8,
-                          bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
+        ax_field.annotate(
+            f"m/z {p['mz']:.4f}\nrt {p['rt']:.2f} s, S/N {p['sn']:.1f}",
+            (p["mz"], p["rt"]),
+            xytext=(10 * side, 6 if side > 0 else -22),
+            textcoords="offset points",
+            ha="left" if side > 0 else "right",
+            color=INK,
+            fontsize=8,
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85),
+        )
     if len(peaks):
-        ax_field.scatter([], [], s=110, facecolor="none", edgecolor=ACCENT, linewidth=2,
-                         label="extracted peak")
+        ax_field.scatter([], [], s=110, facecolor="none", edgecolor=ACCENT, linewidth=2, label="extracted peak")
     ax_field.set_xlabel("m/z")
     ax_field.set_ylabel("retention time [s]")
     if ax_field.get_legend_handles_labels()[0]:
         ax_field.legend(loc="lower left", fontsize=7, frameon=True, framealpha=0.85)
 
-    ax_spec.plot(mz2[len(d["rt"]) // 2], I.sum(axis=0), color=INK, lw=1)
+    ax_spec.plot(mz2[len(d["rt"]) // 2], intensity.sum(axis=0), color=INK, lw=1)
     ax_spec.set_ylabel("summed\nintensity")
-    ax_spec.set_title(f"{d.get('name', '')}: {len(peaks)} extracted peak(s), {len(rejected)} rejected",
-                      loc="left")
-    ax_chrom.plot(I.sum(axis=1), d["rt"], color=INK, lw=1)
+    ax_spec.set_title(f"{d.get('name', '')}: {len(peaks)} extracted peak(s), {len(rejected)} rejected", loc="left")
+    ax_chrom.plot(intensity.sum(axis=1), d["rt"], color=INK, lw=1)
     ax_chrom.set_xlabel("summed\nintensity")
     ax_chrom.xaxis.set_major_locator(plt.MaxNLocator(2))
     ax_chrom.ticklabel_format(axis="x", style="sci", scilimits=(-3, 3))
@@ -116,8 +151,7 @@ def field_figure(d, peaks, rejected, scans):
     """Figure of :func:`plot_field` with a color bar."""
     with plt.rc_context(STYLE):
         fig = plt.figure(figsize=(10, 7))
-        gs = fig.add_gridspec(2, 3, width_ratios=[5, 1.2, 0.15], height_ratios=[1.3, 5],
-                              wspace=0.05, hspace=0.05)
+        gs = fig.add_gridspec(2, 3, width_ratios=[5, 1.2, 0.15], height_ratios=[1.3, 5], wspace=0.05, hspace=0.05)
         ax_field = fig.add_subplot(gs[1, 0])
         ax_spec = fig.add_subplot(gs[0, 0], sharex=ax_field)
         ax_chrom = fig.add_subplot(gs[1, 1], sharey=ax_field)
@@ -170,21 +204,48 @@ def plot_group_detail(d, peaks, rejected, scans, g, config: ExtractionConfig | N
         out = sel & scans.get("outlier", np.zeros_like(sel))
         ax_rt.scatter(scans["rt"][sel & ~out], scans["area"][sel & ~out], s=14, c=INK, lw=0, label="per-scan area")
         if out.any():
-            ax_rt.scatter(scans["rt"][out], scans["area"][out], s=30, facecolors="none", edgecolors=REJECTED,
-                          lw=1.4, label="outlier scan (not fitted)", zorder=5)
+            ax_rt.scatter(
+                scans["rt"][out],
+                scans["area"][out],
+                s=30,
+                facecolors="none",
+                edgecolors=REJECTED,
+                lw=1.4,
+                label="outlier scan (not fitted)",
+                zorder=5,
+            )
         t = np.linspace(d["rt"][0], d["rt"][-1], 600)
         for k, p in enumerate(g_peaks.itertuples()):
-            ax_rt.plot(t, p.baseline + chromato(t, p.height, p.rt, p.rt_sigma, p.rt_tailing, config.convention),
-                       color=ACCENT, lw=2, label="fitted chromatographic peak" if k == 0 else None)
+            ax_rt.plot(
+                t,
+                p.baseline + chromato(t, p.height, p.rt, p.rt_sigma, p.rt_tailing, config.convention),
+                color=ACCENT,
+                lw=2,
+                label="fitted chromatographic peak" if k == 0 else None,
+            )
         first_line = first_cross = True
         for r in g_rej.itertuples():
             if "linear" in r.reason and len(r.line_rt):
-                ax_rt.plot(r.line_rt, r.line, ls=":", lw=2.2, color=REJECTED,
-                           label="linear background (better than a peak)" if first_line else None)
+                ax_rt.plot(
+                    r.line_rt,
+                    r.line,
+                    ls=":",
+                    lw=2.2,
+                    color=REJECTED,
+                    label="linear background (better than a peak)" if first_line else None,
+                )
                 first_line = False
             else:
-                ax_rt.scatter([r.rt], [r.baseline + r.height], marker="x", s=60, c=REJECTED, linewidths=2,
-                              label="rejected: apex not covered" if first_cross else None, zorder=5)
+                ax_rt.scatter(
+                    [r.rt],
+                    [r.baseline + r.height],
+                    marker="x",
+                    s=60,
+                    c=REJECTED,
+                    linewidths=2,
+                    label="rejected: apex not covered" if first_cross else None,
+                    zorder=5,
+                )
                 first_cross = False
         if len(g_peaks):
             ax_rt.axhline(g_peaks["baseline"].iloc[0], color=MUTED, lw=1, ls="--", label="baseline")
@@ -201,9 +262,16 @@ def plot_group_detail(d, peaks, rejected, scans, g, config: ExtractionConfig | N
         else:
             r = g_rej.iloc[0]
             plot_mass_fit(ax_mz, d, r["rt"], r["mz"], 0.006, config)
-        fig.suptitle(f"{d.get('name', '')}, m/z {np.median(scans['mz'][sel]):.4f}: "
-                     f"{len(g_peaks)} peak(s), {len(g_rej)} rejected",
-                     x=0.06, ha="left", y=1.02, fontsize=11, fontweight="bold", color=INK)
+        fig.suptitle(
+            f"{d.get('name', '')}, m/z {np.median(scans['mz'][sel]):.4f}: "
+            f"{len(g_peaks)} peak(s), {len(g_rej)} rejected",
+            x=0.06,
+            ha="left",
+            y=1.02,
+            fontsize=11,
+            fontweight="bold",
+            color=INK,
+        )
     return fig
 
 
@@ -216,15 +284,22 @@ def plot_groups(d, peaks, rejected, scans, max_groups: int | None = 8, config: E
     candidates = list(peaks["mz"]) + list(rejected["mz"])
     if not candidates:
         return []
-    groups = sorted({group_of(scans, m) for m in candidates},
-                    key=lambda g: -scans["area"][scans["group"] == g].max())
+    groups = sorted({group_of(scans, m) for m in candidates}, key=lambda g: -scans["area"][scans["group"] == g].max())
     if max_groups is not None:
         groups = groups[:max_groups]
     return [plot_group_detail(d, peaks, rejected, scans, g, config) for g in groups]
 
 
-__all__ = ["STYLE", "analyse_domain", "field_figure", "group_of", "plot_field",
-           "plot_group_detail", "plot_groups", "plot_mass_fit"]
+__all__ = [
+    "STYLE",
+    "analyse_domain",
+    "field_figure",
+    "group_of",
+    "plot_field",
+    "plot_group_detail",
+    "plot_groups",
+    "plot_mass_fit",
+]
 
 
 PEAK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
@@ -232,8 +307,9 @@ PEAK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
 palette checked for colour vision deficiencies; give ``colors`` to keep a compound's colour)."""
 
 
-def plot_integration(ax, t, y, peaks, method, title: str | None = None, xlim=None, label_areas: bool = True,
-                     colors=None):
+def plot_integration(
+    ax, t, y, peaks, method, title: str | None = None, xlim=None, label_areas: bool = True, colors=None
+):
     """A chromatogram and the peaks integrated by a :class:`peaxart.chromatogram.Method`:
     the area of each peak is filled (see :meth:`~peaxart.chromatogram.Method.bands`)
     and given in the legend (``label_areas``).
@@ -245,12 +321,13 @@ def plot_integration(ax, t, y, peaks, method, title: str | None = None, xlim=Non
     colors = [PEAK_COLORS[k % len(PEAK_COLORS)] for k in range(len(peaks))] if colors is None else list(colors)
     shown = np.ones(len(t), bool) if xlim is None else (t >= xlim[0]) & (t <= xlim[1])
     ax.plot(t[shown], y[shown], color=INK, lw=1)
-    for (lower, upper), p, color in zip(method.bands(t, y, peaks), peaks.itertuples(), colors):
+    for (lower, upper), p, color in zip(method.bands(t, y, peaks), peaks.itertuples(), colors, strict=True):
         if xlim is not None and not xlim[0] <= p.rt <= xlim[1]:
             continue
         area = "NaN" if not np.isfinite(p.area) else f"{p.area:.3g}"
-        ax.fill_between(t[shown], lower[shown], upper[shown], color=color, alpha=0.3, lw=0,
-                        label=f"{p.rt:.1f} s: {area}")
+        ax.fill_between(
+            t[shown], lower[shown], upper[shown], color=color, alpha=0.3, lw=0, label=f"{p.rt:.1f} s: {area}"
+        )
         ax.plot(t[shown], upper[shown], color=color, lw=1.5)
         ax.plot(t[shown], lower[shown], color=color, lw=1, ls="--")
     if label_areas and ax.get_legend_handles_labels()[0]:

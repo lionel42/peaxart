@@ -235,23 +235,27 @@ def fit_chromato(
 
         def residual(p, n_peaks=n_peaks):
             # baseline + sum of the peaks, in the legacy order
-            peaks = [chromato(x, p[3 + 4 * i], p[1 + 4 * i], p[2 + 4 * i], p[4 + 4 * i], convention)
-                     for i in range(n_peaks)]
+            peaks = [
+                chromato(x, p[3 + 4 * i], p[1 + 4 * i], p[2 + 4 * i], p[4 + 4 * i], convention) for i in range(n_peaks)
+            ]
             return p[0] + np.sum(peaks, axis=0) - y
 
         jac = None
         if not legacy_numerics:
+
             def jac(p, n_peaks=n_peaks):
                 out = np.empty((len(x), 1 + 4 * n_peaks))
                 out[:, 0] = 1.0
                 for i in range(n_peaks):
                     _, d_mu, d_sigma, d_height, d_tailing = chromato_jac(
-                        x, p[3 + 4 * i], p[1 + 4 * i], p[2 + 4 * i], p[4 + 4 * i], convention)
-                    out[:, 1 + 4 * i:5 + 4 * i] = np.column_stack([d_mu, d_sigma, d_height, d_tailing])
+                        x, p[3 + 4 * i], p[1 + 4 * i], p[2 + 4 * i], p[4 + 4 * i], convention
+                    )
+                    out[:, 1 + 4 * i : 5 + 4 * i] = np.column_stack([d_mu, d_sigma, d_height, d_tailing])
                 return out
 
-        res = fit(residual, p0, lo, hi, jac=jac, exact=legacy_numerics, max_iterations=max_iterations,
-                  on_abort=on_abort)
+        res = fit(
+            residual, p0, lo, hi, jac=jac, exact=legacy_numerics, max_iterations=max_iterations, on_abort=on_abort
+        )
         params = res.params
         baseline = params[0]
         mu = params[1::4][:n_peaks]
@@ -301,14 +305,23 @@ def fit_chromato(
                 _, support, _ = tests[i]
                 w = y_peaks[i]
                 reasons = (["linear background fits as well"] if fails_line[i] else []) + (
-                    ["apex not covered by the data"] if fails_coverage[i] else [])
-                rejected.append({
-                    "rt": float(mu[i]), "mz": float(np.sum(w * mz_series) / np.sum(w)) if np.sum(w) > 0 else np.nan,
-                    "height": float(height[i]), "rt_sigma": float(sigma[i]), "rt_tailing": float(tailing[i]),
-                    "baseline": float(baseline), "linear_ratio": float(linear_ratio[i]),
-                    "coverage": float(coverage[i]), "reason": " and ".join(reasons),
-                    "line_rt": x[support].copy(), "_support": support,
-                })
+                    ["apex not covered by the data"] if fails_coverage[i] else []
+                )
+                rejected.append(
+                    {
+                        "rt": float(mu[i]),
+                        "mz": float(np.sum(w * mz_series) / np.sum(w)) if np.sum(w) > 0 else np.nan,
+                        "height": float(height[i]),
+                        "rt_sigma": float(sigma[i]),
+                        "rt_tailing": float(tailing[i]),
+                        "baseline": float(baseline),
+                        "linear_ratio": float(linear_ratio[i]),
+                        "coverage": float(coverage[i]),
+                        "reason": " and ".join(reasons),
+                        "line_rt": x[support].copy(),
+                        "_support": support,
+                    }
+                )
         significant &= ~fails_line & ~fails_coverage
         if significant.all():
             break
@@ -358,8 +371,9 @@ def fit_chromato(
     )
 
 
-def split_into_windows(start_idx: float, stop_idx: float, dt: float, n_max: float,
-                       window: float, edge: float) -> list[tuple[float, float]]:
+def split_into_windows(
+    start_idx: float, stop_idx: float, dt: float, n_max: float, window: float, edge: float
+) -> list[tuple[float, float]]:
     """Split an rt index range into windows of ~``window`` s overlapping by ``edge`` (legacy)."""
     if stop_idx - start_idx > 1.2 * (window + 2 * edge) / dt:
         n_windows = int(round((stop_idx - start_idx) / (window / dt)))
@@ -367,10 +381,7 @@ def split_into_windows(start_idx: float, stop_idx: float, dt: float, n_max: floa
         edge_idx = math.ceil(edge / dt)
         start_edge = max(0, start_idx - edge_idx)
         stop_edge = min(n_max - 1, stop_idx + edge_idx)
-        out = [
-            [start_edge + duration * i, start_edge + duration * (i + 1) + 2 * edge_idx]
-            for i in range(n_windows)
-        ]
+        out = [[start_edge + duration * i, start_edge + duration * (i + 1) + 2 * edge_idx] for i in range(n_windows)]
         out[-1][1] = stop_edge
         return [tuple(w) for w in out]
     return [(start_idx, stop_idx)]
@@ -421,8 +432,9 @@ def fit_series(
     if len(t) == 0:
         return out
     rt_bins = t / dt
-    for w_start, w_stop in split_into_windows(rt_bins[0], rt_bins[-1], dt, np.inf,
-                                              config.rt_window, config.rt_window_edge):
+    for w_start, w_stop in split_into_windows(
+        rt_bins[0], rt_bins[-1], dt, np.inf, config.rt_window, config.rt_window_edge
+    ):
         # as the legacy code: the window end is excluded
         sel = np.flatnonzero((rt_bins >= w_start) & (rt_bins < w_stop))
         if len(sel) <= config.min_points + 1:
@@ -443,14 +455,42 @@ def fit_series(
         base_guess = baseline_guess(w_area)
         window_rejected: list[dict] = []
 
-        def run_fit(mu_guess, apex_guess, base_guess, rejected_list, position_bound=config.rt_position_bound,
-                    w_rt=w_rt, w_area=w_area, w_x=w_x, w_mz=w_mz, rt_sigma=rt_sigma, w_start=w_start, w_stop=w_stop):
+        def run_fit(
+            mu_guess,
+            apex_guess,
+            base_guess,
+            rejected_list,
+            position_bound=config.rt_position_bound,
+            w_rt=w_rt,
+            w_area=w_area,
+            w_x=w_x,
+            w_mz=w_mz,
+            rt_sigma=rt_sigma,
+            w_start=w_start,
+            w_stop=w_stop,
+        ):
             return fit_chromato(
-                w_rt, w_area, mu_guess, apex_guess, base_guess, dt, rt_sigma,
-                (w_start * dt, w_stop * dt), w_x, w_mz, config.conf_int, config.rt_peak_broadness,
-                config.ratio_to_linear_fit, position_bound, config.convention,
-                config.legacy_numerics, config.peak_linear_ratio, config.peak_min_coverage,
-                rejected=rejected_list, max_iterations=config.rt_max_iterations, on_abort=config.on_abort,
+                w_rt,
+                w_area,
+                mu_guess,
+                apex_guess,
+                base_guess,
+                dt,
+                rt_sigma,
+                (w_start * dt, w_stop * dt),
+                w_x,
+                w_mz,
+                config.conf_int,
+                config.rt_peak_broadness,
+                config.ratio_to_linear_fit,
+                position_bound,
+                config.convention,
+                config.legacy_numerics,
+                config.peak_linear_ratio,
+                config.peak_min_coverage,
+                rejected=rejected_list,
+                max_iterations=config.rt_max_iterations,
+                on_abort=config.on_abort,
             )
 
         fitted = run_fit(detected[:, 0], detected[:, 1], base_guess, window_rejected)

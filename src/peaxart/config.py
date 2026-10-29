@@ -143,9 +143,18 @@ class ExtractionConfig:
     @classmethod
     def legacy(cls, **changes) -> ExtractionConfig:
         """The behaviour of the legacy alpinac extraction (no per-peak tests)."""
-        return cls(**{"peak_linear_ratio": None, "peak_min_coverage": None, "max_iterations": 2000, "on_abort": "last",
-                      "mz_noise_k": None,
-                      "rt_extra_peaks": 0, "rt_outlier_k": None, **changes})
+        return cls(
+            **{
+                "peak_linear_ratio": None,
+                "peak_min_coverage": None,
+                "max_iterations": 2000,
+                "on_abort": "last",
+                "mz_noise_k": None,
+                "rt_extra_peaks": 0,
+                "rt_outlier_k": None,
+                **changes,
+            }
+        )
 
     def replace(self, **changes) -> ExtractionConfig:
         return replace(self, **changes)
