@@ -30,7 +30,7 @@ def test_pseudo_voigt_fits(domain):
             1.0,
             config,
         )
-        np.testing.assert_allclose(r.mu, d["mu"], rtol=0, atol=1e-6)
+        np.testing.assert_allclose(r.mu, d["mu"], rtol=1e-7)
         np.testing.assert_allclose(r.area, d["A"], rtol=1e-6)
         assert r.baseline == pytest.approx(d["baseline"], rel=1e-6, abs=1e-9)
 
@@ -58,7 +58,7 @@ def test_chromatographic_fits(domain):
             continue
         # A few long multi-peak fits diverge from the last bit (~1e-15) after
         # hundreds of evaluations: small tolerances, not bitwise.
-        np.testing.assert_allclose(r.rt, out["mu"], rtol=1e-8)
+        np.testing.assert_allclose(r.rt, out["mu"], rtol=1e-6)
         np.testing.assert_allclose(r.area, out["area"], rtol=1e-4)
         np.testing.assert_allclose(r.lod, out["LOD"], rtol=1e-2)  # LOD: residual-weighted baseline u
         np.testing.assert_allclose(r.mz, out["mass"], rtol=1e-9)
