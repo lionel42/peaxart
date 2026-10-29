@@ -1,14 +1,15 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "peaxart"
-version = "0.1.0.dev0"
+dynamic = ["version"]
 description = "Peak extraction in the retention time / m/z domain of GC-TOF-MS data (from alpinac)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENCE" }
+license = "LGPL-3.0-or-later"
+license-files = ["LICENCE"]
 authors = [
   { name = "Lionel Constantin", email = "lionel.constantin@empa.ch" },
   { name = "Myriam Guillevic" },
@@ -19,10 +20,26 @@ dependencies = [
   "pandas>=2.0",
   "numba>=0.58",
 ]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+[project.urls]
+Repository = "https://github.com/lionel42/peaxart"
+Issues = "https://github.com/lionel42/peaxart/issues"
 
 [project.optional-dependencies]
 test = ["pytest"]
 notebook = ["matplotlib", "jupyter", "nbformat", "nbclient"]
+
+[tool.hatch.version]
+path = "src/peaxart/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENCE"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/peaxart"]

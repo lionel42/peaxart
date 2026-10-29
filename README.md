@@ -29,8 +29,10 @@ For each domain (typically one unit mass +-0.5 m/z and ~10 s of rt):
 ## Install
 
 ```bash
-pip install -e .   # numpy, scipy, pandas, numba
+pip install peaxart   # numpy, scipy, pandas, numba
 ```
+
+or, from a clone, `pip install -e .`
 
 ## Use
 
