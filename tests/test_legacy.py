@@ -68,6 +68,23 @@ def test_chromatographic_fits(domain):
         np.testing.assert_allclose(r.mz, out["mass"], rtol=1e-9)
 
 
+LOW_SN = 20
+# column: (column of the legacy peaks, rtol) for the peaks with S/N >= LOW_SN. About twice the
+# largest change when the inputs are nudged by up to ±128 ulp (peaxart.testing.rounding_spread):
+# rt 0.002 s, area 0.7 %, rt_sigma 1 %, tailing 5 %, height_u / lod / sn 8 %.
+STRONG_TOL = {
+    "rt": (0, 1e-5),
+    "x": (1, 1e-6),
+    "area": (3, 2e-2),
+    "height_u": (4, 0.2),
+    "rt_sigma": (5, 2e-2),
+    "rt_tailing": (6, 0.1),
+    "mz": (7, 1e-6),
+    "lod": (9, 0.2),
+    "sn": (10, 0.2),
+}
+
+
 def test_domain(domain):
     """End to end. The m/z come from the grid (not the analytic calibration),
     which can change the m/z grouping of noise; these domains are not affected."""
@@ -81,22 +98,24 @@ def test_domain(domain):
         dt=domain.dt,
         config=ExtractionConfig.legacy(),
     )
-    old = domain.peaks[np.argsort(domain.peaks[:, 0])]
-    df = df.sort_values("rt")
+    old = domain.peaks
     assert len(df) == len(old)
-    for col, i in [
-        ("rt", 0),
-        ("x", 1),
-        ("area", 3),
-        ("height_u", 4),
-        ("rt_sigma", 5),
-        ("rt_tailing", 6),
-        ("mz", 7),
-        ("lod", 9),
-        ("sn", 10),
-    ]:
-        tol = 1e-2 if col in ("lod", "sn", "height_u") else 1e-4
-        np.testing.assert_allclose(df[col].to_numpy(), old[:, i], rtol=tol, err_msg=col)
+    if len(old) == 0:
+        return
+    # pair by m/z then rt: in CH3I m/z 64 two peaks are 0.02 s apart and can swap in rt order
+    dist = np.abs(old[:, [7]] - df["mz"].to_numpy()) / 0.01 + np.abs(old[:, [0]] - df["rt"].to_numpy())
+    pair = np.argmin(dist, axis=1)
+    assert len(set(pair)) == len(pair)
+    df = df.iloc[pair]
+
+    # Peaks with a low S/N (legacy value, not affected by rounding) are noise, peaks cut by the
+    # domain edge or split in two: with the rounding of another CPU (GitHub's runners) their
+    # area, sigma or tailing change by up to several 100%, only their position is reproducible.
+    low_sn = old[:, 10] < LOW_SN
+    np.testing.assert_allclose(df["rt"].to_numpy()[low_sn], old[low_sn, 0], atol=0.5, err_msg="rt (low S/N)")
+    np.testing.assert_allclose(df["mz"].to_numpy()[low_sn], old[low_sn, 7], atol=1e-3, err_msg="mz (low S/N)")
+    for col, (i, tol) in STRONG_TOL.items():
+        np.testing.assert_allclose(df[col].to_numpy()[~low_sn], old[~low_sn, i], rtol=tol, err_msg=col)
 
 
 def test_per_peak_tests_remove_background_peaks():
