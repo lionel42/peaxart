@@ -33,8 +33,8 @@ def test_pseudo_voigt_fits(domain):
         idx_big = int(np.argmax(d["A"]))
         idx_closest = int(np.argmin(np.abs(r.mu - d["mu"][idx_big])))
         # found, within half a sigma
-        assert r.mu[idx_closest] == pytest.approx(d["mu"][idx_big], abs=0.5)  
-        if d["A"][idx_big] > 1e4:  
+        assert r.mu[idx_closest] == pytest.approx(d["mu"][idx_big], abs=0.5)
+        if d["A"][idx_big] > 1e4:
             assert r.mu[idx_closest] == pytest.approx(d["mu"][idx_big], abs=0.01)
             assert r.area[idx_closest] == pytest.approx(d["A"][idx_big], rel=1e-2)
 
