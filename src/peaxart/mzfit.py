@@ -177,3 +177,90 @@ def _fast_model(x, y, sigma, alphas, convention):
         return J
 
     return residual, jac
+
+
+def fit_peak_shapes(
+    x: np.ndarray,
+    y: np.ndarray,
+    found: np.ndarray,
+    sigma_guess: np.ndarray,
+    alpha_guess: float = 0.6,
+    height_threshold: float = 1.3,
+    max_iterations: int | None = 2000,
+) -> ScanPeaks:
+    """Fit pseudo-Voigt peaks of free position, area, sigma and alpha and a baseline.
+
+    Unlike :func:`fit_spectrum` (shape fixed by the mass calibration), the shape of
+    each peak is fitted: used to measure the peak shape, e.g. on the calibrant
+    peaks of a mass calibration (legacy ``fit_pseudoVoigt(mode="MassCal")``).
+    Bounds: sigma in [guess - 0.4, min(3, 2 guess)], alpha in [0.2, 1]. Peaks whose
+    fitted height is below ``height_threshold`` x the noise median are removed
+    and the fit is redone. Legacy Gaussian convention.
+
+    :param found: (n, 2) detected peaks, position and apex (:func:`detect_mass_peaks`).
+    :param sigma_guess: (n,) starting sigma of each peak, x units.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    median = noise_median(y, 1 / 3)
+    baseline = max(0.0, median)
+    baseline_lo, baseline_hi = max(0.0, -2 * y.min()), max(3.0, 3 * baseline, 3 * median)
+    mu, sigma = found[:, 0], np.broadcast_to(np.asarray(sigma_guess, dtype=float), found[:, 0].shape)
+    alpha = np.full(len(mu), alpha_guess)
+    area = (found[:, 1] - baseline) / pseudo_voigt_height(1.0, sigma, alpha)
+    residual, jac = _free_shape_model(x, y)
+
+    while True:
+        # legacy bounds: sigma <= 3 x units caps the width of the peaks above m/z ~440
+        # (guess ~3.25 at tof index 60000, PFTBA 502), which biases a sigma regression there
+        sigma_lo = np.maximum(0.05, sigma - 0.4)
+        sigma_hi = np.maximum(np.minimum(3.0, 2 * sigma), sigma_lo + 0.01)
+        ones = np.ones(len(mu))
+        p0 = np.r_[baseline, np.c_[mu, np.maximum(1.0, area), sigma, alpha].ravel()]
+        lo = np.r_[baseline_lo, np.c_[mu - 2.0, np.maximum(1.0, 0.1 * area), sigma_lo, 0.2 * ones].ravel()]
+        hi = np.r_[baseline_hi, np.c_[mu + 2.0, np.maximum(2.0, 10 * area), sigma_hi, ones].ravel()]
+
+        res = fit(residual, p0, lo, hi, jac=jac, exact=False, max_iterations=max_iterations)
+        baseline = float(res.params[0])
+        mu, area, sigma, alpha = res.params[1:].reshape(-1, 4).T
+        keep = baseline + pseudo_voigt_height(area, sigma, alpha) >= height_threshold * median
+        if keep.all():
+            return ScanPeaks(mu, area, sigma, alpha, baseline)
+        if not keep.any():
+            return EMPTY
+        mu, area, sigma, alpha = mu[keep], area[keep], sigma[keep], alpha[keep]
+
+
+def _free_shape_model(x: np.ndarray, y: np.ndarray):
+    """Residual and analytic Jacobian of a baseline + pseudo-Voigt peaks of free shape (legacy convention).
+
+    Parameters: baseline, then (mu, area, sigma, alpha) for each peak.
+    """
+
+    def shapes(p):
+        mu, area, sigma, alpha = (v[:, None] for v in p[1:].reshape(-1, 4).T)
+        d = x[None, :] - mu
+        k = 2 * sigma**2  # legacy Gaussian: exp(-d^2 / (2 k))
+        gauss = np.exp(-(d**2) / (2 * k)) / (sigma * SQRT_2PI)
+        gamma = sigma * C_PV
+        den = d**2 + gamma**2
+        lorentz = gamma / np.pi / den
+        return mu, area, sigma, alpha, d, k, gauss, gamma, den, lorentz
+
+    def residual(p):
+        _, area, _, alpha, _, _, gauss, _, _, lorentz = shapes(p)
+        return p[0] + (area * ((1 - alpha) * gauss + alpha * lorentz)).sum(axis=0) - y
+
+    def jac(p):
+        _, area, sigma, alpha, d, k, gauss, gamma, den, lorentz = shapes(p)
+        J = np.empty((len(x), len(p)))
+        J[:, 0] = 1.0
+        J[:, 1::4] = (area * ((1 - alpha) * gauss * d / k + alpha * lorentz * 2 * d / den)).T
+        J[:, 2::4] = ((1 - alpha) * gauss + alpha * lorentz).T
+        dgauss = gauss * (d**2 / (k * sigma) - 1 / sigma)
+        dlorentz = C_PV / np.pi * (d**2 - gamma**2) / den**2
+        J[:, 3::4] = (area * ((1 - alpha) * dgauss + alpha * dlorentz)).T
+        J[:, 4::4] = (area * (lorentz - gauss)).T
+        return J
+
+    return residual, jac

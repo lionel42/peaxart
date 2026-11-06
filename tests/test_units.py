@@ -6,7 +6,7 @@ import peaxart
 from peaxart.config import ExtractionConfig
 from peaxart.detect import histogram_centres, peak_detect
 from peaxart.leastsq import fit
-from peaxart.mzfit import fit_spectrum
+from peaxart.mzfit import fit_peak_shapes, fit_spectrum
 from peaxart.rtfit import rt_outliers
 from peaxart.shapes import chromato, chromato_area, chromato_jac, pseudo_voigt, pseudo_voigt_height
 
@@ -242,3 +242,17 @@ def test_fast_numerics_same_peak():
     assert len(fast) == len(exact) == 1
     assert fast["mz"].iloc[0] == pytest.approx(exact["mz"].iloc[0], abs=1e-5)
     assert fast["area"].iloc[0] == pytest.approx(exact["area"].iloc[0], rel=1e-3)
+
+
+def test_fit_peak_shapes():
+    """Free sigma and alpha: the shape of two overlapping peaks is recovered (legacy convention)."""
+    x = np.arange(0.0, 60.0)
+    truth = [(25.3, 800.0, 1.2, 0.4), (31.0, 300.0, 1.4, 0.7)]
+    y = 5.0 + sum(pseudo_voigt(x, a, m, s, al, "legacy") for m, a, s, al in truth)
+    found = np.array([[25.0, y[25]], [31.0, y[31]]])
+    peaks = fit_peak_shapes(x, y, found, sigma_guess=np.array([1.0, 1.0]), alpha_guess=0.5)
+    np.testing.assert_allclose(peaks.mu, [25.3, 31.0], atol=1e-4)
+    np.testing.assert_allclose(peaks.sigma, [1.2, 1.4], rtol=1e-3)
+    np.testing.assert_allclose(peaks.alpha, [0.4, 0.7], atol=1e-3)
+    np.testing.assert_allclose(peaks.area, [800.0, 300.0], rtol=1e-3)
+    assert peaks.baseline == pytest.approx(5.0, abs=0.05)

@@ -100,10 +100,82 @@ peaks = peaxart.FixedShapes.from_peaks(shapes).integrate(t, y43)
 `notebooks/make_chromatogram_notebook.py --run`). A new method subclasses
 `peaxart.chromatogram.Method` (`integrate`, `bands` for the plots, `columns`) and is added to `METHODS`.
 
-### Data from TOFWERK h5 files
+### Unit mass chromatograms
 
-peaxart does not read h5 files: get the intensity, rt and the mass calibration
-with your h5 reader (e.g. the legacy alpinac) and pass them as arrays.
+`peaxart.unitmass`: the spectra summed in `m - d_m < m/z < m + d_m` (`d_m` 0.5) for each
+unit mass, then the baseline removed (see [Baseline](#baseline)); method of the legacy
+pipeline (`extract_chomatograms`). The sums are computed scan by scan, so a run can be
+read in blocks; the m/z windows can follow the drift of the calibration (`mz` of shape
+`(n_scans, n_points)`, or one set of tof index bounds per scan).
+
+```python
+chromatograms = peaxart.unit_mass_chromatograms(intensity, mz, masses=range(2, 301))  # (n_scans, n_masses)
+
+# in blocks: sums of each block, then the baseline on the whole run
+bounds = peaxart.mass_bounds(mz, masses)                      # (n_masses, 2) or (n_scans, n_masses, 2)
+sums = np.concatenate([peaxart.unit_mass_sums(block, bounds) for block in blocks])
+chromatograms = peaxart.remove_baseline(sums)                 # peaxart.BaselineConfig()
+```
+
+`UnitMassConfig` holds `d_m` and the `BaselineConfig` (None: the raw sums);
+`UnitMassConfig.legacy()` reproduces the legacy pipeline.
+
+### Baseline
+
+`peaxart.baseline`: smoothing (`[0.25, 0.5, 0.25]`), arPLS baseline removed, clipped at 0.
+Not specific to unit masses: `peaxart.remove_baseline` takes any chromatograms, one
+`(n_scans,)` or several `(n_scans, n)` (e.g. high resolution m/z, tic), with a
+`BaselineConfig` (smoothing kernel and padding, method, arPLS parameters, clipping at 0).
+
+```python
+chromatograms = peaxart.remove_baseline(sums)                                     # BaselineConfig()
+chromatograms = peaxart.remove_baseline(sums, peaxart.BaselineConfig(lam=1e6))
+chromatograms, baseline = peaxart.remove_baseline(sums, return_baseline=True)
+chromatograms = peaxart.remove_baseline(sums, cuts=[1203, 6610])                  # same cuts for all columns
+chromatograms = peaxart.remove_baseline(sums, cuts=[[1203], [], [1203, 7200], ...])  # one list per column
+
+baseline = peaxart.baseline(sums)  # what is removed (after the smoothing)
+baseline = peaxart.arpls(y)        # lam=1e5, diff_order=2, max_iter=50, tol=1e-3
+```
+
+- `peaxart.arpls` gives the results of `pybaselines.Baseline().arpls` (1.1, used by the
+  legacy pipeline; within 1e-10) without the dependency, ~6x faster (banded Cholesky in
+  numba, no BLAS call on short vectors).
+- Default lam 1e7 (legacy 1e5): fitted per piece, arPLS needs a stiffer baseline than
+  over a whole run. Its weights use the noise of the series: over a whole run with
+  x10 changes of the background, the quiet part sets a small noise and the baseline
+  sinks to the bottom of the noise elsewhere; per piece, lam 1e5 follows 50 s humps
+  (6 scans/s), lam 1e7 is a lower envelope through the troughs. Pieces shorter than
+  `min_piece` (30 scans): constant baseline (20th percentile).
+- The default smoothing pads the chromatogram with its end values. The legacy one
+  (`np.convolve(mode="same")`, `BaselineConfig.legacy()`, `UnitMassConfig.legacy()`) pads with zeros: the first and
+  last points are 25 % low, and the arPLS baseline, which follows the low points, is
+  pulled down near both ends of the run (e.g. m/z 28 in the last minute of a run: 427
+  instead of 90).
+
+#### Steps of the background
+
+With `cuts` (scan indices of steps of the background, e.g. when the acquisition changes
+the filament emission), the pieces between them are smoothed and fitted separately: a
+smooth baseline cannot follow a step (it lags for tens of s and leaves false signal).
+`step_index` / `step_jump` locate a step near a known time and test that it is one
+(flat levels on both sides, not the slope of a peak).
+
+`peaxart.step_cuts` (`peaxart.steps`) finds the cuts of each column from the changes
+logged by the instrument (indices in the sums; logged slightly after they take effect):
+`steps` change the level of all columns (all cut at the step of their sum), `switches`
+(channel, index, old, new) are settings switched on and off, e.g. the resonant ejection
+of some ions: the columns whose level drops when a switch is turned on are cut at all
+the switches of its cluster (`StepConfig`: search window, minimum drop and level).
+
+```python
+cuts, summary = peaxart.step_cuts(sums, rt, steps=[i_emission],
+                                  switches=[("REX1", i_on, 0.0, 3.0), ("REX1", i_off, 3.0, 0.0)])
+chromatograms = peaxart.remove_baseline(sums, cuts=cuts)
+summary   # {"steps": [rt of the cuts], "switches": [{"channels", "rt", "masses" cut}, ...]}
+```
+
+
 
 ## Example notebook
 

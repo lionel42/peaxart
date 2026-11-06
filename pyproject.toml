@@ -32,8 +32,8 @@ Repository = "https://github.com/lionel42/peaxart"
 Issues = "https://github.com/lionel42/peaxart/issues"
 
 [project.optional-dependencies]
-test = ["pytest"]
-dev = ["pytest", "ruff"]
+test = ["pytest", "pybaselines"]  # pybaselines: reference of the arPLS baseline
+dev = ["pytest", "ruff", "pybaselines"]
 notebook = ["matplotlib", "jupyter", "nbformat", "nbclient"]
 
 [tool.hatch.version]
