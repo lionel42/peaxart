@@ -16,10 +16,10 @@ Several methods are available (:data:`METHODS`). They share the interface of
 
 Usage::
 
-    peaks = peaxart.integrate(t, y, method="trapezoid")
-    peaks = peaxart.Fit().integrate(t, y, rt=[1823.2, 1826.1])
-    shapes = peaxart.Fit().integrate(t, y_clean_ion)
-    peaks = peaxart.FixedShapes.from_peaks(shapes).integrate(t, y_shared_ion)
+    peaks = px.integrate(t, y, method="trapezoid")
+    peaks = px.Fit().integrate(t, y, rt=[1823.2, 1826.1])
+    shapes = px.Fit().integrate(t, y_clean_ion)
+    peaks = px.FixedShapes.from_peaks(shapes).integrate(t, y_shared_ion)
 """
 
 from __future__ import annotations

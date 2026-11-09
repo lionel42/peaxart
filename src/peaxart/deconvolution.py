@@ -9,9 +9,9 @@ ported verbatim, so that the compound tables are the same:
    the peaks not yet assigned whose apex, start and stop inflexion points are within a fraction of
    the duration (``stopp_ip - start_ip``) of the largest one form a compound.
 
-    peaks = peaxart.find_chromatogram_peaks(chromatograms, rt, masses)   # (n_scans, n_masses) array
-    compounds, peaks = peaxart.group_peaks_legacy(peaks)
-    compounds, peaks = peaxart.legacy_deconvolution(chromatograms, rt, masses)   # both
+    peaks = px.find_chromatogram_peaks(chromatograms, rt, masses)   # (n_scans, n_masses) array
+    compounds, peaks = px.group_peaks_legacy(peaks)
+    compounds, peaks = px.legacy_deconvolution(chromatograms, rt, masses)   # both
 
 The column names are those of the legacy ``pipeline.nc`` (``start_ip``, ``stopp_ip``, ...).
 """

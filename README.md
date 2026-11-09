@@ -38,23 +38,23 @@ or, from a clone, `pip install -e .`
 
 ```python
 import numpy as np
-import peaxart
+import peaxart as px
 
 # intensity: (n_scans, n_points), keep float32 for TOF data
 # rt:        (n_scans,) seconds
 # mz:        m/z of each point: (n_points,), (n_scans, n_points), or a function mz(rt, x)
 # x:         axis of the spectra used for the mass-domain fits (e.g. the tof index)
 # sigma:     mass peak width in x units (number or function of x), alpha: Lorentzian fraction
-peaks = peaxart.extract(intensity, rt, mz, sigma=lambda x: 0.4 + 2e-5 * x, alpha=0.49,
+peaks = px.extract(intensity, rt, mz, sigma=lambda x: 0.4 + 2e-5 * x, alpha=0.49,
                         x=tofidx, masses=range(20, 300), rt_range=(1612, 1621), n_jobs=8)
 
-peaks["compound"] = peaxart.group_compounds(peaks, dt=rt[1] - rt[0])
+peaks["compound"] = px.group_compounds(peaks, dt=rt[1] - rt[0])
 
 # input of the alpinac identification
-peaxart.to_alpinac(peaks, "sample.frag.txt", mass_cal_u=5.0, metadata={"sample": "tank 5"})
+px.to_alpinac(peaks, "sample.frag.txt", mass_cal_u=5.0, metadata={"sample": "tank 5"})
 
 # one domain only
-df = peaxart.extract_domain(intensity_domain, rt_domain, mz_domain, sigma, alpha, x=x_domain)
+df = px.extract_domain(intensity_domain, rt_domain, mz_domain, sigma, alpha, x=x_domain)
 ```
 
 Parameters (all with the legacy defaults) are in `peaxart.ExtractionConfig`,
@@ -82,12 +82,12 @@ unit mass chromatogram), with several methods. Each returns its own columns; all
 `rt`, `height` and `area` (signal x s).
 
 ```python
-peaks = peaxart.integrate(t, y, method="trapezoid")              # detected peaks
-peaks = peaxart.Fit().integrate(t, y, rt=[1823.2, 1826.1])        # start at given rts
+peaks = px.integrate(t, y, method="trapezoid")              # detected peaks
+peaks = px.Fit().integrate(t, y, rt=[1823.2, 1826.1])        # start at given rts
 
 # coelution: shapes fitted on an ion of each compound alone, heights fitted on a shared ion
-shapes = pd.concat([peaxart.Fit().integrate(t, y85), peaxart.Fit().integrate(t, y70)])
-peaks = peaxart.FixedShapes.from_peaks(shapes).integrate(t, y43)
+shapes = pd.concat([px.Fit().integrate(t, y85), px.Fit().integrate(t, y70)])
+peaks = px.FixedShapes.from_peaks(shapes).integrate(t, y43)
 ```
 
 | method | columns besides `rt`, `height`, `area` |
@@ -109,12 +109,12 @@ read in blocks; the m/z windows can follow the drift of the calibration (`mz` of
 `(n_scans, n_points)`, or one set of tof index bounds per scan).
 
 ```python
-chromatograms = peaxart.unit_mass_chromatograms(intensity, mz, masses=range(2, 301))  # (n_scans, n_masses)
+chromatograms = px.unit_mass_chromatograms(intensity, mz, masses=range(2, 301))  # (n_scans, n_masses)
 
 # in blocks: sums of each block, then the baseline on the whole run
-bounds = peaxart.mass_bounds(mz, masses)                      # (n_masses, 2) or (n_scans, n_masses, 2)
-sums = np.concatenate([peaxart.unit_mass_sums(block, bounds) for block in blocks])
-chromatograms = peaxart.remove_baseline(sums)                 # peaxart.BaselineConfig()
+bounds = px.mass_bounds(mz, masses)                      # (n_masses, 2) or (n_scans, n_masses, 2)
+sums = np.concatenate([px.unit_mass_sums(block, bounds) for block in blocks])
+chromatograms = px.remove_baseline(sums)                 # px.BaselineConfig()
 ```
 
 `UnitMassConfig` holds `d_m` and the `BaselineConfig` (None: the raw sums);
@@ -128,14 +128,14 @@ Not specific to unit masses: `peaxart.remove_baseline` takes any chromatograms, 
 `BaselineConfig` (smoothing kernel and padding, method, arPLS parameters, clipping at 0).
 
 ```python
-chromatograms = peaxart.remove_baseline(sums)                                     # BaselineConfig()
-chromatograms = peaxart.remove_baseline(sums, peaxart.BaselineConfig(lam=1e6))
-chromatograms, baseline = peaxart.remove_baseline(sums, return_baseline=True)
-chromatograms = peaxart.remove_baseline(sums, cuts=[1203, 6610])                  # same cuts for all columns
-chromatograms = peaxart.remove_baseline(sums, cuts=[[1203], [], [1203, 7200], ...])  # one list per column
+chromatograms = px.remove_baseline(sums)                                     # BaselineConfig()
+chromatograms = px.remove_baseline(sums, px.BaselineConfig(lam=1e6))
+chromatograms, baseline = px.remove_baseline(sums, return_baseline=True)
+chromatograms = px.remove_baseline(sums, cuts=[1203, 6610])                  # same cuts for all columns
+chromatograms = px.remove_baseline(sums, cuts=[[1203], [], [1203, 7200], ...])  # one list per column
 
-baseline = peaxart.baseline(sums)  # what is removed (after the smoothing)
-baseline = peaxart.arpls(y)        # lam=1e5, diff_order=2, max_iter=50, tol=1e-3
+baseline = px.baseline(sums)  # what is removed (after the smoothing)
+baseline = px.arpls(y)        # lam=1e5, diff_order=2, max_iter=50, tol=1e-3
 ```
 
 - `peaxart.arpls` gives the results of `pybaselines.Baseline().arpls` (1.1, used by the
@@ -169,9 +169,9 @@ of some ions: the columns whose level drops when a switch is turned on are cut a
 the switches of its cluster (`StepConfig`: search window, minimum drop and level).
 
 ```python
-cuts, summary = peaxart.step_cuts(sums, rt, steps=[i_emission],
+cuts, summary = px.step_cuts(sums, rt, steps=[i_emission],
                                   switches=[("REX1", i_on, 0.0, 3.0), ("REX1", i_off, 3.0, 0.0)])
-chromatograms = peaxart.remove_baseline(sums, cuts=cuts)
+chromatograms = px.remove_baseline(sums, cuts=cuts)
 summary   # {"steps": [rt of the cuts], "switches": [{"channels", "rt", "masses" cut}, ...]}
 ```
 

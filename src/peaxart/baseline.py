@@ -19,9 +19,9 @@ default): its weights use the noise of the series, which is homogeneous within a
 alpinac) without the dependency: same defaults, weights, convergence test and
 returned baseline.
 
-    corrected = peaxart.remove_baseline(chromatograms)          # (n_scans,) or (n_scans, n)
-    corrected = peaxart.remove_baseline(chromatograms, cuts=[1203, 6610])   # pieces fitted separately
-    baseline = peaxart.baseline(chromatograms)                  # what is removed (after smoothing)
+    corrected = px.remove_baseline(chromatograms)          # (n_scans,) or (n_scans, n)
+    corrected = px.remove_baseline(chromatograms, cuts=[1203, 6610])   # pieces fitted separately
+    baseline = px.baseline(chromatograms)                  # what is removed (after smoothing)
 """
 
 from __future__ import annotations

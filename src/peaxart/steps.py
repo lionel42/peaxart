@@ -17,8 +17,8 @@ Two kinds of changes (:func:`step_cuts`):
   all the switches of the channels. Channels switched on within ``cluster`` s are
   tested together.
 
-    cuts, summary = peaxart.step_cuts(sums, rt, steps=[i_emission], switches=[("REX1", i_on, 0, 3), ...])
-    corrected = peaxart.remove_baseline(sums, cuts=cuts)
+    cuts, summary = px.step_cuts(sums, rt, steps=[i_emission], switches=[("REX1", i_on, 0, 3), ...])
+    corrected = px.remove_baseline(sums, cuts=cuts)
 """
 
 from __future__ import annotations

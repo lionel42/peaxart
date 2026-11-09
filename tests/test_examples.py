@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import peaxart
+import peaxart as px
 from peaxart.io import load_domain
 
 EXAMPLES = Path(__file__).parents[1] / "data" / "examples"
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.slow
 @pytest.fixture(scope="module")
 def methylhexanes_mz043():
     d = load_domain(EXAMPLES / "methylhexanes_mz043.npz")
-    return peaxart.extract_domain(d["intensity"], d["rt"], d["mz"], d["sigma"], d["alpha"], x=d["x"], dt=d["dt"])
+    return px.extract_domain(d["intensity"], d["rt"], d["mz"], d["sigma"], d["alpha"], x=d["x"], dt=d["dt"])
 
 
 def near(peaks, mz, tol=0.004):

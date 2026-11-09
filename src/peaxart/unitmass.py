@@ -19,8 +19,8 @@ legacy method, the calibration at the end of the run) or follow the drift of
 the calibration (``mz`` of shape (n_scans, n_points)); or give the tof index
 bounds directly (:func:`unit_mass_sums` ``bounds``).
 
-    sums = peaxart.unit_mass_sums(intensity, peaxart.mass_bounds(mz, masses))
-    chromatograms = peaxart.remove_baseline(sums)            # (n_scans, n_masses)
+    sums = px.unit_mass_sums(intensity, px.mass_bounds(mz, masses))
+    chromatograms = px.remove_baseline(sums)            # (n_scans, n_masses)
 """
 
 from __future__ import annotations

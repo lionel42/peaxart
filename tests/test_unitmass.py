@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.linalg import solveh_banded
 
-import peaxart
+import peaxart as px
 from peaxart.baseline import _cholesky_banded, _penalty_bands
 
 
@@ -41,8 +41,8 @@ def test_arpls_as_pybaselines():
     for seed in range(3):
         y = signal(seed=seed)
         reference = pybaselines.Baseline().arpls(y)[0]
-        np.testing.assert_allclose(peaxart.arpls(y), reference, rtol=1e-8, atol=1e-8)
-        np.testing.assert_allclose(peaxart.arpls(y, lam=1e3, diff_order=1),
+        np.testing.assert_allclose(px.arpls(y), reference, rtol=1e-8, atol=1e-8)
+        np.testing.assert_allclose(px.arpls(y, lam=1e3, diff_order=1),
                                    pybaselines.Baseline().arpls(y, lam=1e3, diff_order=1)[0], rtol=1e-8, atol=1e-8)
 
 
@@ -50,7 +50,7 @@ def test_arpls_follows_the_background():
     y = signal()
     x = np.arange(len(y))
     background = 50 + 20 * np.sin(x / len(y) * 6) + 0.01 * x
-    baseline = peaxart.arpls(y)
+    baseline = px.arpls(y)
     away = np.ones(len(y), dtype=bool)
     for c in (500, 1215, 2500):
         away[c - 60:c + 60] = False
@@ -59,14 +59,14 @@ def test_arpls_follows_the_background():
 
 def test_flat_signal():
     # no point below the baseline: NaN baseline (as pybaselines), counted as 0
-    assert np.isnan(peaxart.arpls(np.zeros(100))).all()
-    np.testing.assert_array_equal(peaxart.remove_baseline(np.zeros(100)), np.zeros(100))
+    assert np.isnan(px.arpls(np.zeros(100))).all()
+    np.testing.assert_array_equal(px.remove_baseline(np.zeros(100)), np.zeros(100))
 
 
 def test_smoothing_padding():
     y = np.array([4.0, 4.0, 8.0, 4.0, 4.0])
-    np.testing.assert_allclose(peaxart.smooth(y, (0.25, 0.5, 0.25)), [4, 5, 6, 5, 4])
-    np.testing.assert_allclose(peaxart.smooth(y, (0.25, 0.5, 0.25), "zeros"),
+    np.testing.assert_allclose(px.smooth(y, (0.25, 0.5, 0.25)), [4, 5, 6, 5, 4])
+    np.testing.assert_allclose(px.smooth(y, (0.25, 0.5, 0.25), "zeros"),
                                np.convolve(y, [0.25, 0.5, 0.25], mode="same"))  # legacy: ends 3, not 4
 
 
@@ -74,16 +74,16 @@ def test_end_effect_of_the_legacy_smoothing():
     """Legacy zero padding: low end points pull the baseline down near both ends of the run."""
     rng = np.random.default_rng(4)
     y = 100 + 40 * np.sin(np.arange(2000) / 1500) + rng.normal(0, 0.45, 2000)
-    fixed = peaxart.remove_baseline(y)
-    legacy = peaxart.remove_baseline(y, peaxart.BaselineConfig.legacy())
+    fixed = px.remove_baseline(y)
+    legacy = px.remove_baseline(y, px.BaselineConfig.legacy())
     assert fixed.max() < 3  # only noise is left
     assert legacy[:50].max() > 15 and legacy[-50:].max() > 15
 
 
 def test_mass_bounds_strict():
     mz = np.array([1.4, 1.5, 1.6, 2.0, 2.4, 2.5, 2.6, 3.0])
-    np.testing.assert_array_equal(peaxart.mass_bounds(mz, [2, 3], 0.5), [[2, 5], [6, 8]])  # 1.5 and 2.5 excluded
-    per_scan = peaxart.mass_bounds(np.stack([mz, mz + 0.15]), [2], 0.5)
+    np.testing.assert_array_equal(px.mass_bounds(mz, [2, 3], 0.5), [[2, 5], [6, 8]])  # 1.5 and 2.5 excluded
+    per_scan = px.mass_bounds(np.stack([mz, mz + 0.15]), [2], 0.5)
     np.testing.assert_array_equal(per_scan[:, 0], [[2, 5], [0, 4]])  # 1.55 > 1.5: inside
 
 
@@ -91,13 +91,13 @@ def test_unit_mass_sums():
     rng = np.random.default_rng(2)
     intensity = rng.uniform(0, 10, (20, 40)).astype(np.float32)
     bounds = np.array([[0, 5], [5, 12], [30, 45]])  # the last one clipped to the points
-    sums = peaxart.unit_mass_sums(intensity, bounds)
+    sums = px.unit_mass_sums(intensity, bounds)
     np.testing.assert_allclose(sums[:, 1], intensity[:, 5:12].sum(axis=1), rtol=1e-6)
     np.testing.assert_allclose(sums[:, 2], intensity[:, 30:].sum(axis=1), rtol=1e-6)
     # the same bounds for each scan: same result
-    np.testing.assert_allclose(peaxart.unit_mass_sums(intensity, np.repeat(bounds[None], 20, axis=0)), sums)
+    np.testing.assert_allclose(px.unit_mass_sums(intensity, np.repeat(bounds[None], 20, axis=0)), sums)
     with pytest.raises(ValueError, match="scans"):
-        peaxart.unit_mass_sums(intensity, np.repeat(bounds[None], 3, axis=0))
+        px.unit_mass_sums(intensity, np.repeat(bounds[None], 3, axis=0))
 
 
 def test_unit_mass_chromatograms():
@@ -109,32 +109,32 @@ def test_unit_mass_chromatograms():
     background = (5 + 2 * np.sin(t / 1500))[:, None] * np.ones(n_points)
     peak = 50 * np.exp(-((t - 800) ** 2) / (2 * 8.0**2))[:, None] * np.exp(-((mz - 69.0) ** 2) / (2 * 0.05**2))
     intensity = (background + peak + rng.normal(0, 0.1, (n_scans, n_points))).astype(np.float32)
-    chromatograms = peaxart.unit_mass_chromatograms(intensity, mz, [68, 69, 70])
+    chromatograms = px.unit_mass_chromatograms(intensity, mz, [68, 69, 70])
     assert chromatograms.shape == (n_scans, 3) and (chromatograms >= 0).all()
     y = chromatograms[:, 1]
     assert abs(int(np.argmax(y)) - 800) <= 1
     assert np.abs(np.delete(y, np.s_[700:900])).max() < 0.05 * y.max()  # background removed
     assert chromatograms[:, [0, 2]].max() < 0.05 * y.max()
-    raw = peaxart.unit_mass_chromatograms(intensity, mz, [69], peaxart.UnitMassConfig(baseline=None))
+    raw = px.unit_mass_chromatograms(intensity, mz, [69], px.UnitMassConfig(baseline=None))
     np.testing.assert_allclose(raw[:, 0], intensity[:, (mz > 68.5) & (mz < 69.5)].sum(axis=1), rtol=1e-5)
 
 
 def test_remove_baseline_columns():
     """Several chromatograms at once (columns): as one by one; the baseline is what is removed."""
     y = np.stack([signal(seed=s) for s in range(3)], axis=1)
-    config = peaxart.BaselineConfig(clip=False)
-    corrected = peaxart.remove_baseline(y, config)
+    config = px.BaselineConfig(clip=False)
+    corrected = px.remove_baseline(y, config)
     for k in range(3):
-        np.testing.assert_allclose(corrected[:, k], peaxart.remove_baseline(y[:, k], config))
-    smoothed = peaxart.remove_baseline(y, peaxart.BaselineConfig(method=None, clip=False))
-    np.testing.assert_allclose(smoothed - peaxart.baseline(y), corrected)
-    clipped, baseline = peaxart.remove_baseline(y, return_baseline=True)
-    np.testing.assert_allclose(baseline, peaxart.baseline(y))
+        np.testing.assert_allclose(corrected[:, k], px.remove_baseline(y[:, k], config))
+    smoothed = px.remove_baseline(y, px.BaselineConfig(method=None, clip=False))
+    np.testing.assert_allclose(smoothed - px.baseline(y), corrected)
+    clipped, baseline = px.remove_baseline(y, return_baseline=True)
+    np.testing.assert_allclose(baseline, px.baseline(y))
     np.testing.assert_allclose(clipped, np.clip(corrected, 0, None))
-    one, one_baseline = peaxart.remove_baseline(y[:, 0], return_baseline=True)
+    one, one_baseline = px.remove_baseline(y[:, 0], return_baseline=True)
     np.testing.assert_allclose(one_baseline, baseline[:, 0])
     with pytest.raises(ValueError, match="method"):
-        peaxart.remove_baseline(y, peaxart.BaselineConfig(method="snip"))
+        px.remove_baseline(y, px.BaselineConfig(method="snip"))
 
 
 def stepped(n: int = 3000, seed: int = 5) -> tuple[np.ndarray, np.ndarray]:
@@ -148,37 +148,37 @@ def stepped(n: int = 3000, seed: int = 5) -> tuple[np.ndarray, np.ndarray]:
 
 def test_cuts_follow_steps():
     y, background = stepped()
-    whole = peaxart.remove_baseline(y)
-    cut = peaxart.remove_baseline(y, cuts=[1000])
+    whole = px.remove_baseline(y)
+    cut = px.remove_baseline(y, cuts=[1000])
     after = slice(1000, 1150)  # the whole-run baseline lags behind the step: false signal
     assert whole[after].sum() > 5 * cut[after].sum()
-    np.testing.assert_allclose(peaxart.baseline(y, cuts=[1000])[200:1800], background[200:1800], rtol=0.1)
+    np.testing.assert_allclose(px.baseline(y, cuts=[1000])[200:1800], background[200:1800], rtol=0.1)
     assert cut[1950:2050].sum() == pytest.approx(3000 * 15 * np.sqrt(2 * np.pi), rel=0.1)  # the peak is kept
 
 
 def test_cuts_per_column_and_short_pieces():
     y, _ = stepped()
     both = np.stack([y, y], axis=1)
-    out = peaxart.remove_baseline(both, cuts=[[1000], []])
-    np.testing.assert_allclose(out[:, 0], peaxart.remove_baseline(y, cuts=[1000]))
-    np.testing.assert_allclose(out[:, 1], peaxart.remove_baseline(y))
-    np.testing.assert_allclose(peaxart.remove_baseline(both, cuts=[1000]), np.stack([out[:, 0]] * 2, axis=1))
+    out = px.remove_baseline(both, cuts=[[1000], []])
+    np.testing.assert_allclose(out[:, 0], px.remove_baseline(y, cuts=[1000]))
+    np.testing.assert_allclose(out[:, 1], px.remove_baseline(y))
+    np.testing.assert_allclose(px.remove_baseline(both, cuts=[1000]), np.stack([out[:, 0]] * 2, axis=1))
     # a piece shorter than min_piece: constant baseline (20th percentile), no arPLS
-    _, base = peaxart.remove_baseline(y, cuts=[1000, 1010], return_baseline=True)
+    _, base = px.remove_baseline(y, cuts=[1000, 1010], return_baseline=True)
     assert np.ptp(base[1000:1010]) == 0
     with pytest.raises(ValueError, match="columns"):
-        peaxart.remove_baseline(both, cuts=[[1000], [], [5]])
+        px.remove_baseline(both, cuts=[[1000], [], [5]])
 
 
 def test_step_detection():
     y, _ = stepped()
-    k = peaxart.step_index(y, 990, 1010)
+    k = px.step_index(y, 990, 1010)
     assert k == 1000
-    assert peaxart.step_jump(y, k) == pytest.approx(1.0, abs=0.1)
-    assert np.isnan(peaxart.step_jump(y, 1985))  # the rising side of the peak is not a step
-    assert np.isnan(peaxart.step_jump(y, 500))  # flat: no step (drift > 0.25 x ~0)
-    assert np.isnan(peaxart.step_jump(y, k, min_level=1000))  # both levels too low
-    assert np.isnan(peaxart.step_jump(y, 5))  # incomplete window
+    assert px.step_jump(y, k) == pytest.approx(1.0, abs=0.1)
+    assert np.isnan(px.step_jump(y, 1985))  # the rising side of the peak is not a step
+    assert np.isnan(px.step_jump(y, 500))  # flat: no step (drift > 0.25 x ~0)
+    assert np.isnan(px.step_jump(y, k, min_level=1000))  # both levels too low
+    assert np.isnan(px.step_jump(y, 5))  # incomplete window
 
 
 def test_step_cuts():
@@ -190,7 +190,7 @@ def test_step_cuts():
     ejected = (rt >= 50) & (rt < 70)
     sums[ejected, 2] /= 50  # column 2 ejected between 50 and 70 s
     logged = [int(np.searchsorted(rt, t + 0.4)) for t in (20.0, 50.0, 70.0)]  # logged 0.4 s later
-    cuts, summary = peaxart.step_cuts(sums, rt, steps=[logged[0]],
+    cuts, summary = px.step_cuts(sums, rt, steps=[logged[0]],
                                       switches=[("REX1", logged[1], 0.0, 3.0), ("REX1", logged[2], 3.0, 0.0)],
                                       masses=[68.0, 69.0, 100.0])
     step = int(np.searchsorted(rt, 20.0))
@@ -199,9 +199,9 @@ def test_step_cuts():
     assert cuts[2] == [step, int(np.searchsorted(rt, 50.0)), int(np.searchsorted(rt, 70.0))]
     [switch] = summary["switches"]
     assert switch["masses"] == [100.0] and switch["channels"] == ["REX1"] and len(switch["rt"]) == 2
-    corrected = peaxart.remove_baseline(sums, cuts=cuts)
+    corrected = px.remove_baseline(sums, cuts=cuts)
     assert np.abs(corrected[(rt > 45) & (rt < 75), 2]).max() < 30  # only noise left at the steps
     # disabled, or nothing logged: no cut
-    none, _ = peaxart.step_cuts(sums, rt, steps=[logged[0]], config=peaxart.StepConfig(emission=False))
+    none, _ = px.step_cuts(sums, rt, steps=[logged[0]], config=px.StepConfig(emission=False))
     assert none == [[], [], []]
-    assert peaxart.step_cuts(sums, rt)[0] == [[], [], []]
+    assert px.step_cuts(sums, rt)[0] == [[], [], []]

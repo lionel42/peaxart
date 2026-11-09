@@ -7,25 +7,25 @@ peak function (Pap and Papai 2001).
 
 Quick start::
 
-    import peaxart
+    import peaxart as px
 
     # intensity: (n_scans, n_points) float32, rt: (n_scans,) s,
     # mz: m/z of each point (n_points,) or (n_scans, n_points), or a function mz(rt, x)
-    peaks = peaxart.extract(intensity, rt, mz, sigma=0.9, alpha=0.5,
+    peaks = px.extract(intensity, rt, mz, sigma=0.9, alpha=0.5,
                             masses=range(20, 200), rt_range=(1600, 1630))
-    peaks["compound"] = peaxart.group_compounds(peaks, dt=rt[1] - rt[0])
-    peaxart.to_alpinac(peaks, "run.frag.txt")   # input of the alpinac identification
+    peaks["compound"] = px.group_compounds(peaks, dt=rt[1] - rt[0])
+    px.to_alpinac(peaks, "run.frag.txt")   # input of the alpinac identification
 
-    # unit mass chromatograms (peaxart.unitmass): summed, smoothed, arPLS baseline removed
-    chromatograms = peaxart.unit_mass_chromatograms(intensity, mz, masses=range(2, 301))
-    # any chromatograms (peaxart.baseline), time along the first axis
-    corrected = peaxart.remove_baseline(chromatograms, peaxart.BaselineConfig(lam=1e6))
-    # baseline cut at the steps of the acquisition (peaxart.steps), from the logged changes
-    cuts, summary = peaxart.step_cuts(sums, rt, steps=[i_emission], switches=[("REX1", i_on, 0, 3)])
-    corrected = peaxart.remove_baseline(sums, cuts=cuts)
+    # unit mass chromatograms (px.unitmass): summed, smoothed, arPLS baseline removed
+    chromatograms = px.unit_mass_chromatograms(intensity, mz, masses=range(2, 301))
+    # any chromatograms (px.baseline), time along the first axis
+    corrected = px.remove_baseline(chromatograms, px.BaselineConfig(lam=1e6))
+    # baseline cut at the steps of the acquisition (px.steps), from the logged changes
+    cuts, summary = px.step_cuts(sums, rt, steps=[i_emission], switches=[("REX1", i_on, 0, 3)])
+    corrected = px.remove_baseline(sums, cuts=cuts)
 
-    # one chromatogram (e.g. a unit mass), several methods (peaxart.chromatogram)
-    peaks = peaxart.integrate(t, y, method="trapezoid")
+    # one chromatogram (e.g. a unit mass), several methods (px.chromatogram)
+    peaks = px.integrate(t, y, method="trapezoid")
 """
 
 from peaxart.api import domain_slices, extract
@@ -41,13 +41,13 @@ from peaxart.baseline import (
 )
 from peaxart.chromatogram import METHODS, Fit, FixedShapes, Method, Trapezoid, detect_peaks, integrate
 from peaxart.compounds import group_compounds
+from peaxart.config import ExtractionConfig
 from peaxart.deconvolution import (
     LegacyDeconvolutionConfig,
     find_chromatogram_peaks,
     group_peaks_legacy,
     legacy_deconvolution,
 )
-from peaxart.config import ExtractionConfig
 from peaxart.domain import PEAK_COLUMNS, extract_domain
 from peaxart.io import mass_cal_u_ppm, to_alpinac
 from peaxart.mzfit import detect_mass_peaks, fit_peak_shapes
