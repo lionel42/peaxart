@@ -41,6 +41,12 @@ from peaxart.baseline import (
 )
 from peaxart.chromatogram import METHODS, Fit, FixedShapes, Method, Trapezoid, detect_peaks, integrate
 from peaxart.compounds import group_compounds
+from peaxart.deconvolution import (
+    LegacyDeconvolutionConfig,
+    find_chromatogram_peaks,
+    group_peaks_legacy,
+    legacy_deconvolution,
+)
 from peaxart.config import ExtractionConfig
 from peaxart.domain import PEAK_COLUMNS, extract_domain
 from peaxart.io import mass_cal_u_ppm, to_alpinac
@@ -59,6 +65,7 @@ __all__ = [
     "BaselineConfig",
     "ExtractionConfig",
     "Fit",
+    "LegacyDeconvolutionConfig",
     "FixedShapes",
     "METHODS",
     "Method",
@@ -73,9 +80,12 @@ __all__ = [
     "domain_slices",
     "extract",
     "extract_domain",
+    "find_chromatogram_peaks",
     "fit_peak_shapes",
     "group_compounds",
+    "group_peaks_legacy",
     "integrate",
+    "legacy_deconvolution",
     "level_change",
     "mass_bounds",
     "mass_cal_u_ppm",
