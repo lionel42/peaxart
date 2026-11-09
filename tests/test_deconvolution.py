@@ -57,3 +57,32 @@ def test_group_peaks_legacy(run):
     _, loose = px.group_peaks_legacy(px.find_chromatogram_peaks(y, rt, [40, 41, 42]),
                                          rt_threshold=1.0, rt_threshold_start_ip=1.5, rt_threshold_stopp_ip=1.5)
     assert loose["compound_id"].tolist() == [0, 0, 1, 0]
+
+
+def test_overlapping_groups():
+    """Connected extents, swept by their start: a broad peak joins the narrow ones before it."""
+    groups = px.overlapping_groups(rt=[100.0, 105.0, 110.0, 300.0], start=[99.7, 104.7, 100.0, 299.7],
+                                   stop=[100.3, 105.3, 110.3, 300.3])
+    assert [g.tolist() for g, _, _ in groups] == [[0, 1, 2], [3]]
+    assert groups[0][1] == pytest.approx(110.0 - 6 * 10.0)  # front: 6 half widths (clipped to 10 s)
+    assert groups[1][2] == pytest.approx(300.0 + 8 * 0.3)  # tail: 8 half widths
+    # given in another order: the indices refer to the inputs
+    [(members, _, _)] = px.overlapping_groups(rt=[105.0, 100.0], start=[104.7, 99.7], stop=[105.3, 105.0])
+    assert members.tolist() == [1, 0]
+
+
+def test_fit_chromatogram():
+    """Two coeluting peaks detected as one: the fit splits them; both given to the detected peak."""
+    from peaxart.shapes import chromato
+
+    t = np.arange(1700.0, 1800.0, 1 / 6)
+    y = 5.0 + chromato(t, 1000.0, 1740.0, 1.4, 0.3) + chromato(t, 600.0, 1745.0, 1.4, 0.3)
+    y += 1000.0 * np.exp(-0.5 * ((t - 1775) / 1.4) ** 2)  # a separate group
+    fitted = px.fit_chromatogram(t, y, rt=[1741.0, 1775.0], start=[1738.0, 1773.5], stop=[1747.0, 1776.5])
+    assert list(fitted.columns) == ["peak", *px.deconvolution.FIT_COLUMNS]
+    assert fitted["peak"].tolist() == [0, 0, 1]
+    np.testing.assert_allclose(fitted["rt"], [1740.0, 1745.0, 1775.0], atol=0.1)
+    np.testing.assert_allclose(fitted["baseline"], 5.0, atol=1.0)
+    assert (fitted["signal_prominence"] > 0).all() and fitted.attrs["n_warnings"] >= 0
+    empty = px.fit_chromatogram(t, y, rt=[], start=[], stop=[])
+    assert empty.empty and list(empty.columns) == ["peak", *px.deconvolution.FIT_COLUMNS]

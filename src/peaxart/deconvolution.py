@@ -140,3 +140,142 @@ def legacy_deconvolution(chromatograms: np.ndarray, rt: np.ndarray, masses: Sequ
     config = config or LegacyDeconvolutionConfig()
     peaks = find_chromatogram_peaks(chromatograms, rt, masses, config.width, config.height, config.prominence)
     return group_peaks_legacy(peaks, config.rt_threshold, config.rt_threshold_start_ip, config.rt_threshold_stopp_ip)
+
+
+# --- fit of the peaks of each chromatogram (step 2 of the deconvolution) ---------------------
+
+#: columns of :func:`fit_chromatogram`, besides ``peak`` (from the columns of :class:`peaxart.Fit`)
+FIT_COLUMNS = ("rt", "rt_u", "height", "height_u", "rt_sigma", "rt_tailing", "baseline", "area", "area_u", "sn",
+               "signal_height", "signal_prominence")
+
+
+@dataclass(frozen=True)
+class ChromatogramFitConfig:
+    """Fit of the detected peaks of a chromatogram (:func:`fit_chromatogram`)."""
+
+    #: Gaussian convention of the peak shapes ("standard": the areas are true areas)
+    convention: str = "standard"
+    #: iteration limit of each fit: the few fits that do not converge (weak, unresolved peaks)
+    #: would otherwise take most of the time
+    max_iterations: int = 100
+    #: extent of a peak for the groups of overlapping peaks, in half widths at half maximum of
+    #: each side from the apex, longer on the tail side
+    front_hwhm: float = 6.0
+    tail_hwhm: float = 8.0
+    #: half widths of the detection (apex - start, stop - apex) clipped to this range, s
+    hwhm_range: tuple[float, float] = (0.3, 10.0)
+    #: groups with fewer points are not fitted
+    min_points: int = 10
+
+    def method(self):
+        """The :class:`peaxart.Fit` of these parameters."""
+        from peaxart.chromatogram import Fit
+        from peaxart.config import ExtractionConfig
+
+        return Fit(ExtractionConfig(convention=self.convention, legacy_numerics=False,
+                                    rt_max_iterations=self.max_iterations))
+
+
+def overlapping_groups(rt: np.ndarray, start: np.ndarray, stop: np.ndarray,
+                       config: ChromatogramFitConfig | None = None) -> list[tuple[np.ndarray, float, float]]:
+    """Groups of overlapping peaks of one chromatogram, fitted together.
+
+    The extent of a peak is ``front_hwhm`` x its front half width before its apex and ``tail_hwhm`` x its
+    tail half width after it (half widths: ``rt - start``, ``stop - rt``, clipped to ``hwhm_range``; the
+    smallest if not given); connected extents form a group.
+
+    :param rt, start, stop: apex and half maximum crossings of the peaks (e.g. ``peak_rt``, ``start_ip``,
+        ``stopp_ip`` of :func:`find_chromatogram_peaks`), s.
+    :return: (indices of the peaks in the inputs (sorted by rt), rt range fitted) of each group.
+    """
+    config = config or ChromatogramFitConfig()
+    rt, start, stop = (np.asarray(v, dtype=float) for v in (rt, start, stop))
+    order = np.argsort(rt, kind="quicksort")  # the peaks sorted by rt (as pandas sort_values), as the groups list them
+    rt, start, stop = rt[order], start[order], stop[order]
+    front = np.nan_to_num(np.clip(rt - start, *config.hwhm_range), nan=config.hwhm_range[0])
+    tail = np.nan_to_num(np.clip(stop - rt, *config.hwhm_range), nan=config.hwhm_range[0])
+    lo, hi = rt - config.front_hwhm * front, rt + config.tail_hwhm * tail
+    # connected intervals, swept by their start (a broad peak can start before the narrow ones eluting before it)
+    groups, members, end = [], [], -np.inf
+    for i in np.argsort(lo, kind="stable"):
+        if members and lo[i] >= end:
+            groups.append(members)
+            members = []
+        members.append(i)
+        end = max(end, hi[i]) if len(members) > 1 else hi[i]
+    if members:
+        groups.append(members)
+    return [(order[sorted(g)], float(lo[g].min()), float(hi[g].max())) for g in groups]
+
+
+def fitted_signal_peaks(t: np.ndarray, fitted: pd.DataFrame,
+                        convention: str = "standard") -> tuple[np.ndarray, np.ndarray]:
+    """Height and prominence of the fitted peaks of one group, on the fitted signal.
+
+    The fitted signal is the baseline plus all the fitted peaks of the group; the height is its value at
+    the apex, the prominence is scipy's (``find_peaks``, as the detection). A shoulder (apex not a local
+    maximum) has none by scipy's definition: it gets its prominence alone, its fitted height above the baseline.
+
+    :param fitted: :class:`peaxart.Fit` peaks (``rt``, ``height``, ``rt_sigma``, ``rt_tailing``, ``baseline``).
+    """
+    import warnings
+
+    from scipy.signal import peak_prominences
+
+    from peaxart.shapes import chromato
+
+    t = np.asarray(t, dtype=float)
+    signal = fitted["baseline"].iloc[0] + sum(
+        np.nan_to_num(chromato(t, p.height, p.rt, p.rt_sigma, p.rt_tailing, convention))
+        for p in fitted.itertuples())
+    rt = fitted["rt"].to_numpy(dtype=float)
+    nearest = np.abs(t[None, :] - rt[:, None]).argmin(axis=1)
+    # the apex falls between samples: the highest of the nearest one and its neighbours
+    apex = np.array([max(i - 1, 0) + int(np.argmax(signal[max(i - 1, 0): i + 2])) for i in nearest])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # PeakPropertyWarning: a prominence is 0
+        prominence = peak_prominences(signal, apex)[0]
+    shoulder = prominence <= 0
+    prominence[shoulder] = fitted["height"].to_numpy(dtype=float)[shoulder]
+    return signal[apex], prominence
+
+
+def fit_chromatogram(t: np.ndarray, y: np.ndarray, rt: np.ndarray, start: np.ndarray, stop: np.ndarray,
+                     config: ChromatogramFitConfig | None = None) -> pd.DataFrame:
+    """Fit the detected peaks of one chromatogram, by groups of overlapping peaks (:func:`overlapping_groups`).
+
+    Pap-Papai peaks on a constant baseline (:class:`peaxart.Fit`), starting at the detected rts; the fit
+    adds peaks where the data show a coelution and drops those a straight background explains.
+
+    :param t, y: the chromatogram (e.g. a unit mass), t in s.
+    :param rt, start, stop: apex and half maximum crossings of the detected peaks, s.
+    :return: one row per fitted peak: ``peak`` (index in the inputs of the nearest detected peak of its
+        group) and :data:`FIT_COLUMNS` (the :class:`peaxart.Fit` columns, ``signal_height`` and
+        ``signal_prominence``: :func:`fitted_signal_peaks`); the number of warnings of the fits in
+        ``attrs["n_warnings"]``.
+    """
+    import warnings
+
+    config = config or ChromatogramFitConfig()
+    t, y, rt = np.asarray(t, dtype=float), np.asarray(y, dtype=float), np.asarray(rt, dtype=float)
+    method = config.method()
+    rows, n_warnings = [], 0
+    for members, lo, hi in overlapping_groups(rt, start, stop, config):
+        inside = (t >= lo) & (t <= hi)
+        if inside.sum() < config.min_points:
+            continue
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fitted = method.integrate(t[inside], y[inside], rt=rt[members])
+        n_warnings += len(caught)
+        if fitted.empty:
+            continue
+        nearest = np.abs(fitted["rt"].to_numpy()[:, None] - rt[members][None, :]).argmin(axis=1)
+        fitted["peak"] = members[nearest]
+        fitted["signal_height"], fitted["signal_prominence"] = fitted_signal_peaks(t[inside], fitted,
+                                                                                    config.convention)
+        rows.append(fitted[["peak", *FIT_COLUMNS]])
+    out = (pd.concat(rows, ignore_index=True) if rows
+           else pd.DataFrame({c: pd.Series(dtype=int if c == "peak" else float) for c in ("peak", *FIT_COLUMNS)}))
+    out.attrs["n_warnings"] = n_warnings
+    return out
