@@ -1,15 +1,16 @@
-"""Peak functions: pseudo-Voigt (mass domain) and Pap-Papai (retention time)."""
+"""Peak functions: pseudo-Voigt (mass domain), and Pap-Papai or exponentially modified Gaussian (retention time)."""
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.special import gamma
+from scipy.special import erfc, erfcx, gamma
 
 C_PV = np.sqrt(2 * np.log(2))
 SQRT_2PI = np.sqrt(2 * np.pi)
 
 LEGACY = "legacy"
 STANDARD = "standard"
+SQRT_PI_2 = np.sqrt(np.pi / 2)
 
 
 def gaussian(x, area, mu, sigma, convention: str = STANDARD):
@@ -49,6 +50,53 @@ def multi_pseudo_voigt(x, baseline, area, mu, sigma, alpha, convention: str = ST
     s = np.atleast_1d(sigma)[:, None]
     al = np.atleast_1d(alpha)[:, None]
     return baseline + pseudo_voigt(x, a, m, s, al, convention).sum(axis=0)
+
+
+def emg(x, height, mu, sigma, ratio):
+    """Exponentially modified Gaussian: a Gaussian (``mu``, ``sigma``) convolved with an exponential decay of
+    time constant ``tau = ratio * sigma``, the tail independent of the body.
+
+    ``height`` is the height of the Gaussian (the apex is lower and later when the tail grows): the area is
+    ``height * sigma * sqrt(2 pi)`` whatever the tail. Gaussian below a ratio of 0.01. Computed with ``erfcx``
+    (no overflow far in the tail).
+    """
+    x = np.asarray(x, dtype=float)
+    d = x - mu
+    if ratio <= 0.01:
+        return height * np.exp(-0.5 * (d / sigma) ** 2)
+    return height * SQRT_PI_2 / ratio * _emg_core(d, sigma, ratio)[0]
+
+
+def _emg_core(d, sigma, ratio):
+    """``G E`` = exp(-d^2 / 2 sigma^2) erfcx(u) (stable), ``G`` and ``u`` = (1 / ratio - d / sigma) / sqrt(2)."""
+    u = (1.0 / ratio - d / sigma) / np.sqrt(2.0)
+    g = np.exp(-0.5 * (d / sigma) ** 2)
+    ge = np.empty_like(d)
+    pos = u >= 0
+    ge[pos] = g[pos] * erfcx(u[pos])
+    # far in the tail (u < 0): exp(1 / (2 ratio^2) - d / (ratio sigma)) erfc(u), no overflow
+    neg = ~pos
+    ge[neg] = np.exp(0.5 / ratio**2 - d[neg] / (ratio * sigma)) * erfc(u[neg])
+    return ge, g, u
+
+
+def emg_jac(x, height, mu, sigma, ratio):
+    """:func:`emg` and its derivatives: (value, d/dmu, d/dsigma, d/dheight, d/dratio)."""
+    x = np.asarray(x, dtype=float)
+    d = x - mu
+    if ratio <= 0.01:
+        f = height * np.exp(-0.5 * (d / sigma) ** 2)
+        return f, f * d / sigma**2, f * d * d / sigma**3, f / height if height else np.exp(-0.5 * (d / sigma) ** 2), \
+            np.zeros_like(x)
+    ge, g, u = _emg_core(d, sigma, ratio)
+    k = height * SQRT_PI_2 / ratio
+    f = k * ge
+    dge_du = 2.0 * u * ge - 2.0 * g / np.sqrt(np.pi)  # d(G E)/du at fixed G
+    d_mu = k * (ge * d / sigma**2 + dge_du / (sigma * np.sqrt(2.0)))
+    d_sigma = k * (ge * d * d / sigma**3 + dge_du * d / (sigma**2 * np.sqrt(2.0)))
+    d_height = SQRT_PI_2 / ratio * ge
+    d_ratio = -f / ratio - k * dge_du / (ratio**2 * np.sqrt(2.0))
+    return f, d_mu, d_sigma, d_height, d_ratio
 
 
 def chromato(x, height, mu, sigma, tailing, convention: str = STANDARD):
@@ -109,3 +157,121 @@ def chromato_area(height, sigma, tailing):
         w = 4.0 / tailing**2
         return gamma(w) * height * tailing * sigma / (2.0 * np.exp((w - 1) * (np.log(w - 1) - 1)))
     return height * sigma * SQRT_2PI
+
+
+# --- chromatographic peak shapes, by name ---------------------------------------------------------
+
+
+class PeakShape:
+    """A chromatographic peak function of four parameters: ``height`` (amplitude), ``location`` (s),
+    ``sigma`` (width, s) and ``tail`` (asymmetry; its meaning depends on the shape).
+
+    The fits (:func:`peaxart.rtfit.fit_chromato`, :class:`peaxart.Fit`, :class:`peaxart.FixedShapes`) use
+    a shape through this interface, chosen by name (:data:`SHAPES`, :func:`peak_shape`;
+    ``ExtractionConfig.rt_peak_shape``): a new function is a new subclass. The apex (rt and height of the
+    maximum) is what the fits report as ``rt`` / ``height``; ``location`` / ``height`` are the parameters
+    (``shape_rt`` / ``shape_height``), equal to the apex for a shape whose maximum is at its location.
+    """
+
+    name: str = ""
+    #: meaning of the tail parameter
+    tail: str = ""
+    #: start value and bounds of the tail parameter in the fits
+    tail_start: float = 0.1
+    tail_bounds: tuple[float, float] = (0.001, 1.6)
+
+    def value(self, x, height, location, sigma, tail) -> np.ndarray:
+        raise NotImplementedError
+
+    def jac(self, x, height, location, sigma, tail):
+        """The value and its derivatives: (value, d/dlocation, d/dsigma, d/dheight, d/dtail)."""
+        raise NotImplementedError
+
+    def area(self, height, sigma, tail) -> float:
+        raise NotImplementedError
+
+    def apex(self, height, location, sigma, tail) -> tuple[float, float]:
+        """rt and height of the maximum."""
+        return float(location), float(height)
+
+    def location_offset(self, sigma, tail) -> float:
+        """apex - location (s): how far before its apex the location of a peak is. The fits start a peak
+        detected at its apex this much earlier, and let it move this much further back."""
+        return 0.0
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
+
+
+class PapPapai(PeakShape):
+    """Pap and Papai (:func:`chromato`): the tail parameter ``a`` in ]0, 2[ sets both the asymmetry near the
+    apex and the decay of the tail; maximum at the location. ``convention``: of its Gaussian limit."""
+
+    name = "pap_papai"
+    tail = "tailing a in ]0, 2[ (Gaussian when a -> 0)"
+    tail_bounds = (0.001, 1.6)
+
+    def __init__(self, convention: str = STANDARD):
+        self.convention = convention
+
+    def value(self, x, height, location, sigma, tail):
+        return chromato(x, height, location, sigma, tail, self.convention)
+
+    def jac(self, x, height, location, sigma, tail):
+        return chromato_jac(x, height, location, sigma, tail, self.convention)
+
+    def area(self, height, sigma, tail):
+        return chromato_area(height, sigma, tail)
+
+    def __repr__(self) -> str:
+        return f"PapPapai({self.convention!r})"
+
+
+class ExpModGaussian(PeakShape):
+    """Exponentially modified Gaussian (:func:`emg`): a Gaussian body convolved with an exponential tail of
+    time constant ``tail * sigma``, the tail independent of the body. Its maximum is later and lower than the
+    location and height of the Gaussian (:meth:`apex`); its area does not depend on the tail."""
+
+    name = "emg"
+    tail = "tau / sigma (Gaussian below 0.01)"
+    tail_bounds = (0.001, 3.0)
+
+    def __init__(self, convention: str = STANDARD):
+        self.convention = convention  # the Gaussian is the standard one (no legacy EMG)
+
+    def value(self, x, height, location, sigma, tail):
+        return emg(x, height, location, sigma, tail)
+
+    def jac(self, x, height, location, sigma, tail):
+        return emg_jac(x, height, location, sigma, tail)
+
+    def area(self, height, sigma, tail):
+        return float(height * sigma * SQRT_2PI)
+
+    def apex(self, height, location, sigma, tail):
+        if tail <= 0.01:
+            return float(location), float(height)
+        from scipy.optimize import minimize_scalar
+
+        res = minimize_scalar(lambda x: -float(emg(np.array([x]), height, location, sigma, tail)[0]),
+                              bounds=(location, location + (tail + 3.0) * sigma), method="bounded",
+                              options={"xatol": 1e-6 * sigma})
+        return float(res.x), float(-res.fun)
+
+    def location_offset(self, sigma, tail) -> float:
+        return self.apex(1.0, 0.0, sigma, tail)[0]
+
+
+SHAPES: dict[str, type[PeakShape]] = {PapPapai.name: PapPapai, ExpModGaussian.name: ExpModGaussian}
+"""The chromatographic peak shapes, by name."""
+
+
+def peak_shape(name: str | PeakShape = "pap_papai", convention: str = STANDARD) -> PeakShape:
+    """The shape of this name (:data:`SHAPES`), or the given one."""
+    if isinstance(name, PeakShape):
+        return name
+    try:
+        return SHAPES[name](convention)
+    except KeyError:
+        raise ValueError(f"Unknown peak shape {name!r}, one of {sorted(SHAPES)}") from None
+

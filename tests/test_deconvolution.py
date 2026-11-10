@@ -78,11 +78,36 @@ def test_fit_chromatogram():
     t = np.arange(1700.0, 1800.0, 1 / 6)
     y = 5.0 + chromato(t, 1000.0, 1740.0, 1.4, 0.3) + chromato(t, 600.0, 1745.0, 1.4, 0.3)
     y += 1000.0 * np.exp(-0.5 * ((t - 1775) / 1.4) ** 2)  # a separate group
-    fitted = px.fit_chromatogram(t, y, rt=[1741.0, 1775.0], start=[1738.0, 1773.5], stop=[1747.0, 1776.5])
-    assert list(fitted.columns) == ["peak", *px.deconvolution.FIT_COLUMNS]
+    pap = px.ChromatogramFitConfig(peak_shape="pap_papai")  # the data are Pap-Papai peaks
+    fitted = px.fit_chromatogram(t, y, rt=[1741.0, 1775.0], start=[1738.0, 1773.5], stop=[1747.0, 1776.5], config=pap)
+    assert list(fitted.columns) == ["peak", "added", *px.deconvolution.FIT_COLUMNS]
+    assert not fitted["added"].any()
     assert fitted["peak"].tolist() == [0, 0, 1]
     np.testing.assert_allclose(fitted["rt"], [1740.0, 1745.0, 1775.0], atol=0.1)
     np.testing.assert_allclose(fitted["baseline"], 5.0, atol=1.0)
     assert (fitted["signal_prominence"] > 0).all() and fitted.attrs["n_warnings"] >= 0
-    empty = px.fit_chromatogram(t, y, rt=[], start=[], stop=[])
-    assert empty.empty and list(empty.columns) == ["peak", *px.deconvolution.FIT_COLUMNS]
+    empty = px.fit_chromatogram(t, y, rt=[], start=[], stop=[], config=px.ChromatogramFitConfig(add_seeds=False))
+    assert empty.empty and list(empty.columns) == ["peak", "added", *px.deconvolution.FIT_COLUMNS]
+    # nothing detected: the peaks are found by the added seeds, linked to no detected peak
+    seeded = px.fit_chromatogram(t, y, rt=[], start=[], stop=[], config=pap)
+    assert seeded["added"].all() and (seeded["peak"] == -1).all()
+    np.testing.assert_allclose(seeded["rt"], [1740.0, 1745.0, 1775.0], atol=0.1)
+
+
+def test_added_seeds():
+    """Narrow peaks the detection missed are seeds; a detected peak is not, even with offset crossings;
+    a bump at the noise level is not."""
+    t = np.arange(1700.0, 1800.0, 1 / 6)
+    noise = np.random.default_rng(0).normal(0, 30, len(t))
+    y = (100 + noise + gauss(t, 1720, 1.5, 5000) + gauss(t, 1740, 0.5, 4000)  # narrow: 1.2 s FWHM, 7 scans
+         + gauss(t, 1760, 1.5, 1e5) + gauss(t, 1768, 0.6, 250))  # a bump of ~8 noise sigma on the tail
+    rt, start, stop = [1720.0, 1760.0], [1718.2, 1758.2], [1721.8, 1761.8]
+    seeds, s0, s1 = px.added_seeds(t, y, rt, start, stop)
+    np.testing.assert_allclose(seeds, [1740.0], atol=0.2)
+    assert s0[0] < 1740 < s1[0]
+    # the detected peak given with crossings that miss its apex (detection off by 0.6 s): still detected
+    seeds, _, _ = px.added_seeds(t, y, [1719.4, 1760.0], [1718.0, 1758.2], [1719.8, 1761.8])
+    np.testing.assert_allclose(seeds, [1740.0], atol=0.2)
+    # a lower threshold takes the bump too
+    seeds, _, _ = px.added_seeds(t, y, rt, start, stop, px.ChromatogramFitConfig(seed_min_snr=3))
+    assert np.abs(seeds - 1768).min() < 0.3

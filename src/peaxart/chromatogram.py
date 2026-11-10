@@ -34,7 +34,7 @@ from scipy.signal import peak_prominences
 from peaxart.config import ExtractionConfig
 from peaxart.detect import _window, peak_detect
 from peaxart.rtfit import fit_series
-from peaxart.shapes import chromato, chromato_area
+from peaxart.shapes import PeakShape, peak_shape
 
 COMMON_COLUMNS = ["rt", "height", "area"]
 """Columns of the peak table of every method: retention time (s), height above the
@@ -308,14 +308,25 @@ class Fit(Method):
         "sn",
         "linear_ratio",
         "baseline",
+        "shape_rt",
+        "shape_height",
     ]
+    """``rt`` / ``height``: the apex; ``shape_rt``, ``shape_height``, ``rt_sigma``, ``rt_tailing``: the parameters
+    of the peak function (:attr:`shape`), equal to the apex for Pap-Papai."""
 
     def __init__(self, config: ExtractionConfig | None = None, k: float = 5.0):
         """:param k: threshold of the peak detection (noise standard deviations of the slope)."""
         self.config = config or ExtractionConfig(convention="standard", legacy_numerics=False)
         self.k = k
 
-    def integrate(self, t, y, rt=None) -> pd.DataFrame:
+    @property
+    def shape(self) -> PeakShape:
+        """The peak function (``config.rt_peak_shape``)."""
+        return peak_shape(self.config.rt_peak_shape, self.config.convention)
+
+    def integrate(self, t, y, rt=None, sigma=None) -> pd.DataFrame:
+        """:param sigma: with ``rt``: the start rt sigma of each peak (s), e.g. from its detected width;
+            None: the expected sigma (``config.rt_sigma_at``)."""
         t = np.asarray(t, dtype=float)
         y = np.asarray(y, dtype=float)
         if len(t) < 3:
@@ -327,11 +338,15 @@ class Fit(Method):
             def detect(tg, yg, pw, dt):
                 return peak_detect(tg, yg, pw, slope_threshold(noise, pw, dt, self.k), dt)
         else:
-            guesses = np.sort(np.atleast_1d(rt).astype(float))
+            order = np.argsort(np.atleast_1d(rt).astype(float), kind="stable")
+            guesses = np.atleast_1d(rt).astype(float)[order]
+            sigmas = None if sigma is None else np.atleast_1d(sigma).astype(float)[order]
 
             def detect(tg, yg, pw, dt):
-                g = guesses[(guesses >= tg[0]) & (guesses <= tg[-1])]
-                return np.column_stack([g, np.interp(g, tg, yg)])
+                inside = (guesses >= tg[0]) & (guesses <= tg[-1])
+                g = guesses[inside]
+                columns = [g, np.interp(g, tg, yg)] + ([] if sigmas is None else [sigmas[inside]])
+                return np.column_stack(columns)
 
         fitted = fit_series(t, y, dt, self.config, detect=detect, baseline_guess=lambda w: float(np.quantile(w, 0.05)))
         rows = []
@@ -339,11 +354,11 @@ class Fit(Method):
             rel_u = f.height_u[k] / f.height[k] if f.height[k] else np.nan
             rows.append(
                 {
-                    "rt": f.rt[k],
-                    "height": f.height[k],
+                    "rt": f.apex_rt[k],
+                    "height": f.apex_height[k],
                     "area": f.area[k],
                     "rt_u": f.rt_u[k],
-                    "height_u": f.height_u[k],
+                    "height_u": f.height_u[k] * (f.apex_height[k] / f.height[k] if f.height[k] else 1.0),
                     "area_u": f.area[k] * rel_u,
                     "rt_sigma": f.sigma[k],
                     "rt_tailing": f.tailing[k],
@@ -351,6 +366,8 @@ class Fit(Method):
                     "sn": f.sn[k],
                     "linear_ratio": f.linear_ratio[k],
                     "baseline": f.baseline,
+                    "shape_rt": f.rt[k],
+                    "shape_height": f.height[k],
                 }
             )
         if not rows:
@@ -361,7 +378,7 @@ class Fit(Method):
         t = np.asarray(t, dtype=float)
         out = []
         for p in peaks.itertuples():
-            peak = chromato(t, p.height, p.rt, p.rt_sigma, p.rt_tailing, self.config.convention)
+            peak = self.shape.value(t, p.shape_height, p.shape_rt, p.rt_sigma, p.rt_tailing)
             visible = peak > 1e-3 * p.height
             out.append((np.where(visible, p.baseline, np.nan), np.where(visible, p.baseline + peak, np.nan)))
         return out
@@ -385,14 +402,17 @@ class FixedShapes(Method):
         "baseline",
         "baseline_slope",
         "residual_std",
+        "shape_rt",
+        "shape_height",
     ]
 
     def __init__(
-        self, rt, rt_sigma, rt_tailing, baseline: str = "linear", support: float = 0.01, convention: str = "standard"
+        self, rt, rt_sigma, rt_tailing, baseline: str = "linear", support: float = 0.01, convention: str = "standard",
+        shape: str | PeakShape = "pap_papai",
     ):
         """
-        :param rt, rt_sigma, rt_tailing: position (s), width (s) and tailing of each peak
-            (see :func:`peaxart.shapes.chromato`).
+        :param rt, rt_sigma, rt_tailing: location (s), width (s) and tail parameter of each peak: the parameters
+            of the peak function ``shape`` (:func:`peaxart.shapes.peak_shape`; ``shape_rt`` of a :class:`Fit`).
         :param baseline: ``"linear"``, ``"constant"`` or ``"none"``.
         """
         self.rt = np.atleast_1d(rt).astype(float)
@@ -403,18 +423,21 @@ class FixedShapes(Method):
         self.baseline = baseline
         self.support = support
         self.convention = convention
+        self.shape = peak_shape(shape, convention)
 
     @classmethod
     def from_peaks(cls, peaks: pd.DataFrame, **kwargs) -> FixedShapes:
-        """The shapes of a peak table with ``rt``, ``rt_sigma`` and ``rt_tailing`` (e.g. of :class:`Fit`)."""
-        return cls(peaks["rt"].to_numpy(), peaks["rt_sigma"].to_numpy(), peaks["rt_tailing"].to_numpy(), **kwargs)
+        """The shapes of a peak table with ``shape_rt`` (else ``rt``), ``rt_sigma`` and ``rt_tailing`` (e.g. of
+        :class:`Fit`; give its ``shape``)."""
+        location = peaks["shape_rt"] if "shape_rt" in peaks else peaks["rt"]
+        return cls(location.to_numpy(), peaks["rt_sigma"].to_numpy(), peaks["rt_tailing"].to_numpy(), **kwargs)
 
     def profiles(self, t) -> np.ndarray:
         """(n_peaks, len(t)) peaks of height 1."""
         t = np.asarray(t, dtype=float)
         return np.array(
             [
-                chromato(t, 1.0, r, s, a, self.convention)
+                self.shape.value(t, 1.0, r, s, a)
                 for r, s, a in zip(self.rt, self.rt_sigma, self.rt_tailing, strict=True)
             ]
         ).reshape(len(self.rt), len(t))
@@ -446,19 +469,24 @@ class FixedShapes(Method):
         p_u = np.sqrt(np.clip(np.diag(cov), 0, None))
         b0 = p[n] if self.baseline != "none" else 0.0
         b1 = p[n + 1] if self.baseline == "linear" else 0.0
-        unit_area = np.array([chromato_area(1.0, s, a) for s, a in zip(self.rt_sigma, self.rt_tailing, strict=True)])
+        unit_area = np.array([self.shape.area(1.0, s, a) for s, a in zip(self.rt_sigma, self.rt_tailing, strict=True)])
+        # the apex of each unit profile: rt, and height per unit amplitude
+        apex = np.array([self.shape.apex(1.0, r, s, a)
+                         for r, s, a in zip(self.rt, self.rt_sigma, self.rt_tailing, strict=True)]).reshape(-1, 2)
         out = pd.DataFrame(
             {
-                "rt": self.rt,
-                "height": p[:n],
+                "rt": apex[:, 0],
+                "height": p[:n] * apex[:, 1],
                 "area": p[:n] * unit_area,
-                "height_u": p_u[:n],
+                "height_u": p_u[:n] * apex[:, 1],
                 "area_u": p_u[:n] * unit_area,
                 "rt_sigma": self.rt_sigma,
                 "rt_tailing": self.rt_tailing,
-                "baseline": b0 + b1 * (self.rt - t_ref),
+                "baseline": b0 + b1 * (apex[:, 0] - t_ref),
                 "baseline_slope": b1,
                 "residual_std": residual_std,
+                "shape_rt": self.rt,
+                "shape_height": p[:n],
             },
             columns=self.columns,
         )
@@ -468,7 +496,7 @@ class FixedShapes(Method):
         t = np.asarray(t, dtype=float)
         out = []
         for p in peaks.itertuples():
-            peak = chromato(t, p.height, p.rt, p.rt_sigma, p.rt_tailing, self.convention)
+            peak = self.shape.value(t, p.shape_height, p.shape_rt, p.rt_sigma, p.rt_tailing)
             visible = peak > 1e-3 * max(p.height, 1e-300)
             base = p.baseline + p.baseline_slope * (t - p.rt)
             out.append((np.where(visible, base, np.nan), np.where(visible, base + peak, np.nan)))

@@ -256,3 +256,74 @@ def test_fit_peak_shapes():
     np.testing.assert_allclose(peaks.alpha, [0.4, 0.7], atol=1e-3)
     np.testing.assert_allclose(peaks.area, [800.0, 300.0], rtol=1e-3)
     assert peaks.baseline == pytest.approx(5.0, abs=0.05)
+
+
+def test_emg():
+    """Exponentially modified Gaussian: area independent of the tail, Gaussian limit, tail, analytic Jacobian."""
+    from scipy.integrate import trapezoid
+
+    from peaxart.shapes import emg, peak_shape
+
+    shape = peak_shape("emg")
+
+    x = np.linspace(-50, 500, 550001)  # the tail of ratio 10 (tau 15 s): 30 tau
+    for ratio in (0.005, 0.3, 1.0, 3.0, 10.0):
+        y = emg(x, 2.0, 10.0, 1.5, ratio)
+        assert trapezoid(y, x) == pytest.approx(shape.area(2.0, 1.5, ratio), rel=1e-6)
+        assert np.all(np.isfinite(y)) and y.min() >= 0
+    np.testing.assert_allclose(emg(x, 2.0, 10.0, 1.5, 0.005), 2.0 * np.exp(-0.5 * ((x - 10) / 1.5) ** 2), atol=1e-4)
+    # the tail: exp(-d / tau) far after the apex
+    y = emg(np.array([40.0, 41.0]), 1.0, 10.0, 1.5, 2.0)
+    assert y[1] / y[0] == pytest.approx(np.exp(-1 / 3.0), rel=1e-6)
+    # the apex is later and lower than the Gaussian's
+    y = emg(x, 2.0, 10.0, 1.5, 1.0)
+    assert x[np.argmax(y)] > 10.0 and y.max() < 2.0
+    np.testing.assert_allclose(shape.value(x, 2.0, 10.0, 1.5, 1.0), y)
+    rt, height = shape.apex(2.0, 10.0, 1.5, 1.0)  # the maximum
+    assert rt == pytest.approx(x[np.argmax(y)], abs=1e-3) and height == pytest.approx(y.max(), rel=1e-6)
+    # Jacobian against finite differences
+    xs = np.linspace(0, 40, 400)
+    p = np.array([2.0, 10.0, 1.5, 1.2])  # height, mu, sigma, ratio
+    f, *derivatives = shape.jac(xs, *p[[0, 1]], p[2], p[3])
+    order = [1, 2, 0, 3]  # d/dmu, d/dsigma, d/dheight, d/dratio
+    for k, analytic in zip(order, derivatives, strict=True):
+        h = 1e-6 * max(1.0, abs(p[k]))
+        up, down = p.copy(), p.copy()
+        up[k] += h
+        down[k] -= h
+        numeric = (emg(xs, *up) - emg(xs, *down)) / (2 * h)
+        np.testing.assert_allclose(analytic, numeric, rtol=1e-5, atol=1e-7)
+
+
+def test_peak_shapes_by_name():
+    """The chromatographic peak functions, chosen by name: the fits report the apex, and the parameters
+    of the function (shape_rt, shape_height) to draw it."""
+    from peaxart.config import ExtractionConfig
+    from peaxart.shapes import SHAPES, ExpModGaussian, PapPapai, PeakShape, peak_shape
+
+    assert set(SHAPES) >= {"pap_papai", "emg"}
+    assert isinstance(peak_shape("emg"), ExpModGaussian) and isinstance(peak_shape(), PapPapai)
+    assert peak_shape("pap_papai", "legacy").convention == "legacy"
+    with pytest.raises(ValueError, match="Unknown peak shape"):
+        peak_shape("lorentzian")
+    for shape in SHAPES.values():
+        assert issubclass(shape, PeakShape) and shape.name and shape.tail
+    # Pap-Papai: the apex is the location; EMG: later and lower
+    assert peak_shape().apex(2.0, 10.0, 1.5, 0.5) == (10.0, 2.0)
+    rt, height = peak_shape("emg").apex(2.0, 10.0, 1.5, 1.0)
+    assert rt > 10.0 and height < 2.0
+
+    t = np.arange(1700.0, 1800.0, 1 / 6)
+    y = 5.0 + peak_shape("emg").value(t, 1000.0, 1740.0, 1.4, 1.2)
+    fitted = px.Fit(ExtractionConfig(convention="standard", legacy_numerics=False, rt_peak_shape="emg")).integrate(
+        t, y, rt=[1741.0])
+    [peak] = fitted.itertuples()
+    apex_rt, apex_height = peak_shape("emg").apex(1000.0, 1740.0, 1.4, 1.2)
+    assert peak.rt == pytest.approx(apex_rt, abs=0.05) and peak.height == pytest.approx(apex_height, rel=0.01)
+    assert peak.shape_rt == pytest.approx(1740.0, abs=0.05) and peak.shape_height == pytest.approx(1000.0, rel=0.01)
+    assert peak.rt_tailing == pytest.approx(1.2, rel=0.05)
+    assert peak.area == pytest.approx(1000.0 * 1.4 * np.sqrt(2 * np.pi), rel=0.01)
+    # the same shapes in FixedShapes: heights refitted at the apex
+    fixed = px.FixedShapes.from_peaks(fitted, shape="emg", baseline="constant").integrate(t, y)
+    assert fixed["rt"].iloc[0] == pytest.approx(peak.rt)
+    assert fixed["height"].iloc[0] == pytest.approx(peak.height, rel=0.01)

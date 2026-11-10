@@ -21,7 +21,7 @@ from matplotlib.colors import LogNorm
 from peaxart.config import ExtractionConfig
 from peaxart.domain import MzAxis, extract_domain
 from peaxart.mzfit import detect_mass_peaks, fit_spectrum
-from peaxart.shapes import chromato, pseudo_voigt
+from peaxart.shapes import peak_shape, pseudo_voigt
 
 # One sequential hue for the signal, an accent for the extracted peaks,
 # red for what is rejected, neutral ink for everything else.
@@ -218,7 +218,8 @@ def plot_group_detail(d, peaks, rejected, scans, g, config: ExtractionConfig | N
         for k, p in enumerate(g_peaks.itertuples()):
             ax_rt.plot(
                 t,
-                p.baseline + chromato(t, p.height, p.rt, p.rt_sigma, p.rt_tailing, config.convention),
+                p.baseline + peak_shape(config.rt_peak_shape, config.convention).value(t, p.height, p.rt, p.rt_sigma,
+                                                                                      p.rt_tailing),
                 color=ACCENT,
                 lw=2,
                 label="fitted chromatographic peak" if k == 0 else None,

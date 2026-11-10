@@ -71,6 +71,20 @@ class ExtractionConfig:
     rt_sigma_slope: float = 0.05452
     rt_sigma_exp_k: float = 0.00193
     rt_sigma_scale: float = 1.0
+    rt_sigma_bounds: tuple[float, float] = (0.2, 2.0)
+    """Bounds of the fitted rt sigma of a peak, times its start value (the expected sigma, or the one given
+    with the peak), at least ``rt_sigma_floor``."""
+    rt_sigma_floor: tuple[float, float] = (0.5, 0.8)
+    """Smallest lower and upper bounds of the fitted rt sigma (s)."""
+    rt_peak_shape: str = "pap_papai"
+    """The chromatographic peak function, by name (:data:`peaxart.shapes.SHAPES`): ``"pap_papai"``, ``"emg"``."""
+    rt_tailing_max: float | None = None
+    """Upper bound of the fitted tail parameter of the peaks (default: the shape's: Pap-Papai 1.6, defined in
+    ]0, 2[; EMG 3 tau / sigma)."""
+    rt_baseline_max_factor: float | None = None
+    """The baseline of the fits of a window stays below this times the start baseline of the window (its 5 %
+    quantile), also in the refits with more peaks. None: legacy, 10 x the start value of each fit (a refit
+    starts at the baseline of the fit before, so the bound can rise from fit to fit)."""
     rt_window: float = 120.0
     """Maximal duration of a fitted rt window (s); longer groups are split."""
     rt_window_edge: float = 2.5

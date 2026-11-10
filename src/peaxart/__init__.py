@@ -45,11 +45,13 @@ from peaxart.config import ExtractionConfig
 from peaxart.deconvolution import (
     ChromatogramFitConfig,
     LegacyDeconvolutionConfig,
+    added_seeds,
     find_chromatogram_peaks,
     fit_chromatogram,
     group_peaks_legacy,
     legacy_deconvolution,
     overlapping_groups,
+    split_at_valleys,
 )
 from peaxart.domain import PEAK_COLUMNS, extract_domain
 from peaxart.io import mass_cal_u_ppm, to_alpinac
@@ -77,6 +79,7 @@ __all__ = [
     "StepConfig",
     "Trapezoid",
     "UnitMassConfig",
+    "added_seeds",
     "arpls",
     "baseline",
     "detect_mass_peaks",
@@ -97,6 +100,7 @@ __all__ = [
     "overlapping_groups",
     "remove_baseline",
     "smooth",
+    "split_at_valleys",
     "step_cuts",
     "step_index",
     "step_jump",
