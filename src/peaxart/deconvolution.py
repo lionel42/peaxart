@@ -25,6 +25,9 @@ import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks
 
+from peaxart.backgrounds import BackgroundName
+from peaxart.shapes import ShapeName
+
 #: columns of :func:`find_chromatogram_peaks`, in order
 PEAK_COLUMNS_LEGACY = ("peak_heights", "prominences", "left_bases", "right_bases", "widths", "width_heights",
                        "start_ip", "stopp_ip", "peak_rt", "mass", "flatness", "tailing_ratio")
@@ -149,7 +152,7 @@ FWHM_PER_SIGMA = 2.0 * np.sqrt(2.0 * np.log(2.0))
 
 #: columns of :func:`fit_chromatogram`, besides ``peak`` (from the columns of :class:`peaxart.Fit`)
 FIT_COLUMNS = ("rt", "rt_u", "height", "height_u", "rt_sigma", "rt_tailing", "shape_rt", "shape_height", "baseline",
-               "area", "area_u", "sn",
+               "baseline_slope", "area", "area_u", "sn",
                "signal_height", "signal_prominence")
 
 
@@ -159,11 +162,25 @@ class ChromatogramFitConfig:
 
     #: Gaussian convention of the peak shapes ("standard": the areas are true areas)
     convention: str = "standard"
-    #: the peak function, by name (:data:`peaxart.shapes.SHAPES`; ``ExtractionConfig.rt_peak_shape``).
+    #: the peak function (:class:`peaxart.shapes.ShapeName`, or its string; ``ExtractionConfig.rt_peak_shape``).
     #: Exponentially modified Gaussian: on 3 test runs, 17 % fewer detected peaks without a fitted peak than
     #: Pap-Papai (876 -> 731), its tail followed further (isolated peaks R2 0.998 -> 1.000); the fitted ``rt`` /
     #: ``height`` are its apex, ``shape_rt`` / ``shape_height`` its location / amplitude
-    peak_shape: str = "emg"
+    peak_shape: ShapeName | str = ShapeName.EMG
+    #: the background under the peaks of a group (:class:`peaxart.backgrounds.BackgroundName`, or its string;
+    #: ``ExtractionConfig.rt_background``): constant, linear, exponential; several: each window
+    #: fitted with the first, another one kept where clearly better: at least as many peaks and a residual std below
+    #: ``background_ratio`` x (``ExtractionConfig.rt_background_ratio``), not tried where the residuals of the first
+    #: are below ``background_noise`` x the noise. The fitted ``baseline`` is its value at the apex of each peak,
+    #: ``baseline_slope`` its derivative there. No single background is best: a line or a decay fits the small
+    #: peaks on the N2 tail and the broad air hump, but its start values on the tail of a large peak at a window end
+    #: lift it under the small peaks next to it. Measured on 3 test runs, detected peaks without a fitted peak (large
+    #: ones > 1e4), fit time: constant 688 (11), 139 s; linear 625 (13); exponential 691 (13); constant + linear 549
+    #: (6), 249 s; all three 518 (5), 375 s; ratio 0.9: 501 (5). Noise skip on the 2 air runs: always tried 482,
+    #: 332 s; 4 x noise 489, 244 s; 8 x 514, 186 s
+    background: BackgroundName | str | tuple[BackgroundName | str, ...] = tuple(BackgroundName)
+    background_ratio: float = 0.9
+    background_noise: float | None = 4.0
     #: iteration limit of each fit: the few fits that do not converge (weak, unresolved peaks)
     #: would otherwise take most of the time
     max_iterations: int = 100
@@ -226,6 +243,8 @@ class ChromatogramFitConfig:
         from peaxart.config import ExtractionConfig
 
         return Fit(ExtractionConfig(convention=self.convention, legacy_numerics=False, rt_peak_shape=self.peak_shape,
+                                    rt_background=self.background, rt_background_ratio=self.background_ratio,
+                                    rt_background_noise=self.background_noise,
                                     rt_max_iterations=self.max_iterations, rt_sigma_bounds=self.sigma_bounds,
                                     rt_baseline_max_factor=self.baseline_max_factor, rt_tailing_max=self.tailing_max))
 
@@ -323,28 +342,31 @@ def added_seeds(t: np.ndarray, y: np.ndarray, rt: np.ndarray, start: np.ndarray,
     return seed_rt[keep], seed_start[keep], seed_stop[keep]
 
 
-def fitted_signal_peaks(t: np.ndarray, fitted: pd.DataFrame, shape="pap_papai") -> tuple[np.ndarray, np.ndarray]:
+def fitted_signal_peaks(t: np.ndarray, fitted: pd.DataFrame,
+                        shape=ShapeName.PAP_PAPAI) -> tuple[np.ndarray, np.ndarray]:
     """Height and prominence of the fitted peaks of one group, on the fitted signal.
 
-    The fitted signal is the baseline plus all the fitted peaks of the group; the height is its value at
-    the apex, the prominence is scipy's (``find_peaks``, as the detection). A shoulder (apex not a local
-    maximum) has none by scipy's definition: it gets its prominence alone, its fitted height above the baseline.
+    The fitted signal is the background (:func:`peaxart.peak_background`) plus all the fitted peaks of the
+    group; the height is its value at the apex, the prominence is scipy's (``find_peaks``, as the detection). A
+    shoulder (apex not a local maximum) has none by scipy's definition: it gets its prominence alone, its fitted
+    height above the background.
 
     :param fitted: :class:`peaxart.Fit` peaks (apex ``rt``, ``height``; ``shape_rt``, ``shape_height``, ``rt_sigma``,
-        ``rt_tailing``: the parameters of ``shape``; ``baseline``).
+        ``rt_tailing``: the parameters of ``shape``; ``baseline``, ``baseline_slope``).
     :param shape: the peak function (:func:`peaxart.shapes.peak_shape`: a name or a shape).
     """
     import warnings
 
     from scipy.signal import peak_prominences
 
+    from peaxart.chromatogram import peak_background
     from peaxart.shapes import peak_shape
 
     shape = peak_shape(shape)
     t = np.asarray(t, dtype=float)
     location = fitted["shape_rt"] if "shape_rt" in fitted else fitted["rt"]
     amplitude = fitted["shape_height"] if "shape_height" in fitted else fitted["height"]
-    signal = fitted["baseline"].iloc[0] + sum(
+    signal = peak_background(t, fitted) + sum(
         np.nan_to_num(shape.value(t, h, r, p.rt_sigma, p.rt_tailing))
         for p, r, h in zip(fitted.itertuples(), location, amplitude, strict=True))
     rt = fitted["rt"].to_numpy(dtype=float)
@@ -363,9 +385,9 @@ def fit_chromatogram(t: np.ndarray, y: np.ndarray, rt: np.ndarray, start: np.nda
                      config: ChromatogramFitConfig | None = None) -> pd.DataFrame:
     """Fit the detected peaks of one chromatogram, by groups of overlapping peaks (:func:`overlapping_groups`).
 
-    Pap-Papai peaks on a constant baseline (:class:`peaxart.Fit`), starting at the detected rts; the fit
-    adds peaks where the data show a coelution and drops those a straight background explains. The peaks
-    the detection missed are added as priors (``add_seeds``, :func:`added_seeds`).
+    Peaks of ``config.peak_shape`` on a ``config.background`` (:class:`peaxart.Fit`), starting at the detected
+    rts; the fit adds peaks where the data show a coelution and drops those a straight background explains. The
+    peaks the detection missed are added as priors (``add_seeds``, :func:`added_seeds`).
 
     :param t, y: the chromatogram (e.g. a unit mass), t in s.
     :param rt, start, stop: apex and half maximum crossings of the detected peaks, s.
@@ -413,5 +435,7 @@ def fit_chromatogram(t: np.ndarray, y: np.ndarray, rt: np.ndarray, start: np.nda
                               for c in ("peak", "added", *FIT_COLUMNS)}))
     out.attrs["n_warnings"] = n_warnings
     out.attrs["n_added_seeds"] = len(rt) - n_detected
-    out.attrs["peak_shape"] = config.peak_shape
+    out.attrs["peak_shape"] = str(config.peak_shape)
+    out.attrs["background"] = (str(config.background) if isinstance(config.background, str)
+                               else tuple(str(b) for b in config.background))
     return out

@@ -327,3 +327,96 @@ def test_peak_shapes_by_name():
     fixed = px.FixedShapes.from_peaks(fitted, shape="emg", baseline="constant").integrate(t, y)
     assert fixed["rt"].iloc[0] == pytest.approx(peak.rt)
     assert fixed["height"].iloc[0] == pytest.approx(peak.height, rel=0.01)
+
+
+@pytest.mark.parametrize("name", ["constant", "linear", "exponential"])
+def test_backgrounds(name):
+    """The backgrounds of the chromatographic fit, by name: analytic Jacobian and slope, start values in their
+    bounds, and a fit of peaks on that background recovers it and the peaks."""
+    from peaxart.backgrounds import BACKGROUNDS, background
+    from peaxart.rtfit import fit_chromato
+    from peaxart.shapes import emg, peak_shape
+
+    bg = background(name)
+    assert isinstance(bg, BACKGROUNDS[name]) and bg.name == name
+    span = (100.0, 160.0)
+    x = np.linspace(*span, 601)
+    true = {"constant": [500.0], "linear": [3000.0, 800.0], "exponential": [400.0, 5000.0, 15.0]}[name]
+    p = np.array(true)
+    # Jacobian and slope against finite differences
+    for k in range(bg.n_params):
+        h = 1e-6 * max(1.0, abs(p[k]))
+        up, down = p.copy(), p.copy()
+        up[k] += h
+        down[k] -= h
+        numeric = (bg.value(x, up, span) - bg.value(x, down, span)) / (2 * h)
+        np.testing.assert_allclose(bg.jac(x, p, span)[:, k], numeric, rtol=1e-5, atol=1e-6)
+    numeric = (bg.value(x + 1e-4, p, span) - bg.value(x - 1e-4, p, span)) / 2e-4
+    np.testing.assert_allclose(bg.slope(x, p, span), numeric, rtol=1e-5, atol=1e-6)
+    # peaks on it: fitted with this background
+    y = bg.value(x, p, span) + emg(x, 2e4, 120.0, 1.0, 1.0) + emg(x, 6e3, 140.0, 1.0, 1.0)
+    start = bg.guess(x, y, span, lambda v: float(np.quantile(v, 0.05)))
+    p0, lo, hi = bg.bounds(start, bg.limit(start, 3.0), span)
+    assert np.all(np.array(lo) <= p0) and np.all(np.array(p0) <= hi)
+    f = fit_chromato(x, y, [121.0, 141.0], [np.interp(121.0, x, y), np.interp(141.0, x, y)], start, 0.1, 1.0, span,
+                     np.zeros(len(x)), np.zeros(len(x)), convention="standard", legacy_numerics=False,
+                     shape=peak_shape("emg"), background=bg)
+    assert len(f) == 2
+    np.testing.assert_allclose(f.background_at(x), bg.value(x, p, span), rtol=1e-3, atol=2.0)
+    np.testing.assert_allclose(f.height, [2e4, 6e3], rtol=1e-3)
+    np.testing.assert_allclose(f.rt, [120.0, 140.0], atol=1e-3)
+
+
+def test_background_constant_is_legacy():
+    """The constant background keeps the legacy start values and bounds of the baseline."""
+    from peaxart.backgrounds import background
+
+    bg = background()
+    for g in (0.0, 0.5, 2.0, 1e4):
+        hi = max(3.0, g * 10)
+        assert bg.bounds(np.array([g]), None) == ([min(max(1.0, g), hi)], [min(max(0.0, g / 3), min(max(1.0, g), hi))],
+                                                  [hi])
+    assert bg.limit(np.array([200.0]), 1.5)[0] == 300.0 and bg.limit(np.array([200.0]), None) is None
+    with pytest.raises(ValueError, match="Unknown background"):
+        background("quadratic")
+
+
+def test_names():
+    """The enums of the backgrounds and peak shapes list exactly the registries, and their strings work alike."""
+    from peaxart.backgrounds import BACKGROUNDS, BackgroundName, background
+    from peaxart.shapes import SHAPES, ShapeName, peak_shape
+
+    assert set(BackgroundName) == set(BACKGROUNDS) and set(ShapeName) == set(SHAPES)
+    assert all(BACKGROUNDS[b].name is b for b in BackgroundName)
+    assert all(SHAPES[s].name is s for s in ShapeName)
+    assert type(background("linear")) is type(background(BackgroundName.LINEAR))
+    assert type(peak_shape("emg")) is type(peak_shape(ShapeName.EMG))
+    assert px.ChromatogramFitConfig().background == ("constant", "linear", "exponential")
+
+
+def test_fit_background_columns():
+    """Fit reports the background at each apex (baseline) and its slope; peak_background redraws it."""
+    x = np.arange(0.0, 120.0, 0.2)
+    base = 2000.0 - 10.0 * x
+    y = base + chromato(x, 5e4, 40.0, 1.0, 0.01, "standard") + chromato(x, 3e4, 80.0, 1.0, 0.01, "standard")
+    method = px.Fit(ExtractionConfig(convention="standard", legacy_numerics=False, rt_background="linear"))
+    peaks = method.integrate(x, y, rt=[40.0, 80.0])
+    assert len(peaks) == 2
+    np.testing.assert_allclose(peaks["baseline"], [1600.0, 1200.0], rtol=1e-3)
+    np.testing.assert_allclose(peaks["baseline_slope"], -10.0, rtol=1e-3)
+    np.testing.assert_allclose(px.peak_background(x, peaks), np.maximum(base, 0), rtol=1e-3, atol=1.0)
+    constant = px.Fit(ExtractionConfig(convention="standard", legacy_numerics=False)).integrate(x, y, rt=[40.0, 80.0])
+    assert (constant["baseline_slope"] == 0).all()
+
+
+def test_background_selection():
+    """Several backgrounds: the first, another one kept only where clearly better."""
+    x = np.arange(0.0, 60.0, 0.2)
+    peaks = chromato(x, 5e3, 20.0, 1.0, 0.01, "standard") + chromato(x, 3e3, 40.0, 1.0, 0.01, "standard")
+    config = ExtractionConfig(convention="standard", legacy_numerics=False, rt_background=("constant", "linear"))
+    flat = px.Fit(config).integrate(x, 500.0 + peaks, rt=[20.0, 40.0])
+    assert len(flat) == 2 and (flat["baseline_slope"] == 0).all()  # constant: as good, kept
+    sloped = px.Fit(config).integrate(x, 2e4 - 300.0 * x + peaks, rt=[20.0, 40.0])
+    assert len(sloped) == 2
+    np.testing.assert_allclose(sloped["baseline_slope"], -300.0, rtol=1e-2)
+    np.testing.assert_allclose(sloped["height"], [5e3, 3e3], rtol=1e-2)

@@ -29,6 +29,7 @@ Quick start::
 """
 
 from peaxart.api import domain_slices, extract
+from peaxart.backgrounds import BackgroundName
 from peaxart.baseline import (
     BaselineConfig,
     arpls,
@@ -39,7 +40,16 @@ from peaxart.baseline import (
     step_index,
     step_jump,
 )
-from peaxart.chromatogram import METHODS, Fit, FixedShapes, Method, Trapezoid, detect_peaks, integrate
+from peaxart.chromatogram import (
+    METHODS,
+    Fit,
+    FixedShapes,
+    Method,
+    Trapezoid,
+    detect_peaks,
+    integrate,
+    peak_background,
+)
 from peaxart.compounds import group_compounds
 from peaxart.config import ExtractionConfig
 from peaxart.deconvolution import (
@@ -56,6 +66,7 @@ from peaxart.deconvolution import (
 from peaxart.domain import PEAK_COLUMNS, extract_domain
 from peaxart.io import mass_cal_u_ppm, to_alpinac
 from peaxart.mzfit import detect_mass_peaks, fit_peak_shapes
+from peaxart.shapes import ShapeName
 from peaxart.steps import StepConfig, step_cuts
 from peaxart.unitmass import (
     UnitMassConfig,
@@ -67,6 +78,7 @@ from peaxart.unitmass import (
 __version__ = "0.1.1"
 
 __all__ = [
+    "BackgroundName",
     "BaselineConfig",
     "ChromatogramFitConfig",
     "ExtractionConfig",
@@ -76,6 +88,7 @@ __all__ = [
     "METHODS",
     "Method",
     "PEAK_COLUMNS",
+    "ShapeName",
     "StepConfig",
     "Trapezoid",
     "UnitMassConfig",
@@ -98,6 +111,7 @@ __all__ = [
     "mass_bounds",
     "mass_cal_u_ppm",
     "overlapping_groups",
+    "peak_background",
     "remove_baseline",
     "smooth",
     "split_at_valleys",

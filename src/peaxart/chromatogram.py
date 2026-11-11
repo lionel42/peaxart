@@ -34,7 +34,7 @@ from scipy.signal import peak_prominences
 from peaxart.config import ExtractionConfig
 from peaxart.detect import _window, peak_detect
 from peaxart.rtfit import fit_series
-from peaxart.shapes import PeakShape, peak_shape
+from peaxart.shapes import PeakShape, ShapeName, peak_shape
 
 COMMON_COLUMNS = ["rt", "height", "area"]
 """Columns of the peak table of every method: retention time (s), height above the
@@ -284,8 +284,30 @@ class Trapezoid(Method):
         return out
 
 
+def peak_background(t, peaks: pd.DataFrame) -> np.ndarray:
+    """The background under fitted peaks at times ``t``, from the ``baseline`` (at each apex ``rt``) and
+    ``baseline_slope`` (its derivative there) of the peaks of one fit: interpolated between the apexes, the
+    tangent of the first / last peak beyond them (>= 0). Exact for a constant or linear background; for a
+    curved one (exponential) its chords between the apexes."""
+    t = np.asarray(t, dtype=float)
+    if len(peaks) == 0:
+        return np.zeros(len(t))
+    order = np.argsort(peaks["rt"].to_numpy(dtype=float))
+    rt = peaks["rt"].to_numpy(dtype=float)[order]
+    base = peaks["baseline"].to_numpy(dtype=float)[order]
+    slope = (peaks["baseline_slope"].to_numpy(dtype=float)[order] if "baseline_slope" in peaks
+             else np.zeros(len(rt)))
+    slope = np.nan_to_num(slope)
+    out = np.interp(t, rt, base)
+    before, after = t < rt[0], t > rt[-1]
+    out[before] = base[0] + slope[0] * (t[before] - rt[0])
+    out[after] = base[-1] + slope[-1] * (t[after] - rt[-1])
+    return np.maximum(out, 0.0)
+
+
 class Fit(Method):
-    """Chromatographic peaks (Pap and Papai) and a constant baseline fitted to the chromatogram.
+    """Chromatographic peaks (Pap and Papai, or another peak function: ``config.rt_peak_shape``) and a constant
+    baseline (or another background: ``config.rt_background``) fitted to the chromatogram.
 
     The rt stage of :func:`peaxart.extract_domain` (:func:`peaxart.rtfit.fit_series`):
     windows of ``config.rt_window``, per-peak tests, and up to ``config.rt_extra_peaks``
@@ -310,9 +332,11 @@ class Fit(Method):
         "baseline",
         "shape_rt",
         "shape_height",
+        "baseline_slope",
     ]
     """``rt`` / ``height``: the apex; ``shape_rt``, ``shape_height``, ``rt_sigma``, ``rt_tailing``: the parameters
-    of the peak function (:attr:`shape`), equal to the apex for Pap-Papai."""
+    of the peak function (:attr:`shape`), equal to the apex for Pap-Papai. ``baseline``: the background at the
+    apex, ``baseline_slope``: its derivative there (0 for a constant one; :func:`peak_background`)."""
 
     def __init__(self, config: ExtractionConfig | None = None, k: float = 5.0):
         """:param k: threshold of the peak detection (noise standard deviations of the slope)."""
@@ -365,9 +389,10 @@ class Fit(Method):
                     "lod": f.lod[k],
                     "sn": f.sn[k],
                     "linear_ratio": f.linear_ratio[k],
-                    "baseline": f.baseline,
+                    "baseline": float(f.background_at(f.apex_rt[k])),
                     "shape_rt": f.rt[k],
                     "shape_height": f.height[k],
+                    "baseline_slope": float(f.background_slope(f.apex_rt[k])),
                 }
             )
         if not rows:
@@ -380,7 +405,8 @@ class Fit(Method):
         for p in peaks.itertuples():
             peak = self.shape.value(t, p.shape_height, p.shape_rt, p.rt_sigma, p.rt_tailing)
             visible = peak > 1e-3 * p.height
-            out.append((np.where(visible, p.baseline, np.nan), np.where(visible, p.baseline + peak, np.nan)))
+            base = p.baseline + p.baseline_slope * (t - p.rt)
+            out.append((np.where(visible, base, np.nan), np.where(visible, base + peak, np.nan)))
         return out
 
 
@@ -408,7 +434,7 @@ class FixedShapes(Method):
 
     def __init__(
         self, rt, rt_sigma, rt_tailing, baseline: str = "linear", support: float = 0.01, convention: str = "standard",
-        shape: str | PeakShape = "pap_papai",
+        shape: ShapeName | str | PeakShape = ShapeName.PAP_PAPAI,
     ):
         """
         :param rt, rt_sigma, rt_tailing: location (s), width (s) and tail parameter of each peak: the parameters

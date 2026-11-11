@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 import numpy as np
 from scipy.special import erfc, erfcx, gamma
 
@@ -162,18 +164,27 @@ def chromato_area(height, sigma, tailing):
 # --- chromatographic peak shapes, by name ---------------------------------------------------------
 
 
+class ShapeName(StrEnum):
+    """The chromatographic peak shapes available (:data:`SHAPES`); equal to their string, which may be given
+    instead."""
+
+    PAP_PAPAI = "pap_papai"
+    EMG = "emg"
+
+
 class PeakShape:
     """A chromatographic peak function of four parameters: ``height`` (amplitude), ``location`` (s),
     ``sigma`` (width, s) and ``tail`` (asymmetry; its meaning depends on the shape).
 
     The fits (:func:`peaxart.rtfit.fit_chromato`, :class:`peaxart.Fit`, :class:`peaxart.FixedShapes`) use
-    a shape through this interface, chosen by name (:data:`SHAPES`, :func:`peak_shape`;
-    ``ExtractionConfig.rt_peak_shape``): a new function is a new subclass. The apex (rt and height of the
+    a shape through this interface, chosen by name (:class:`ShapeName`, :data:`SHAPES`, :func:`peak_shape`;
+    ``ExtractionConfig.rt_peak_shape``): a new function is a new subclass, its name in :class:`ShapeName` and
+    the class in :data:`SHAPES`. The apex (rt and height of the
     maximum) is what the fits report as ``rt`` / ``height``; ``location`` / ``height`` are the parameters
     (``shape_rt`` / ``shape_height``), equal to the apex for a shape whose maximum is at its location.
     """
 
-    name: str = ""
+    name: ShapeName
     #: meaning of the tail parameter
     tail: str = ""
     #: start value and bounds of the tail parameter in the fits
@@ -207,7 +218,7 @@ class PapPapai(PeakShape):
     """Pap and Papai (:func:`chromato`): the tail parameter ``a`` in ]0, 2[ sets both the asymmetry near the
     apex and the decay of the tail; maximum at the location. ``convention``: of its Gaussian limit."""
 
-    name = "pap_papai"
+    name = ShapeName.PAP_PAPAI
     tail = "tailing a in ]0, 2[ (Gaussian when a -> 0)"
     tail_bounds = (0.001, 1.6)
 
@@ -232,7 +243,7 @@ class ExpModGaussian(PeakShape):
     time constant ``tail * sigma``, the tail independent of the body. Its maximum is later and lower than the
     location and height of the Gaussian (:meth:`apex`); its area does not depend on the tail."""
 
-    name = "emg"
+    name = ShapeName.EMG
     tail = "tau / sigma (Gaussian below 0.01)"
     tail_bounds = (0.001, 3.0)
 
@@ -262,16 +273,16 @@ class ExpModGaussian(PeakShape):
         return self.apex(1.0, 0.0, sigma, tail)[0]
 
 
-SHAPES: dict[str, type[PeakShape]] = {PapPapai.name: PapPapai, ExpModGaussian.name: ExpModGaussian}
+SHAPES: dict[ShapeName, type[PeakShape]] = {s.name: s for s in (PapPapai, ExpModGaussian)}
 """The chromatographic peak shapes, by name."""
 
 
-def peak_shape(name: str | PeakShape = "pap_papai", convention: str = STANDARD) -> PeakShape:
+def peak_shape(name: ShapeName | str | PeakShape = ShapeName.PAP_PAPAI, convention: str = STANDARD) -> PeakShape:
     """The shape of this name (:data:`SHAPES`), or the given one."""
     if isinstance(name, PeakShape):
         return name
     try:
         return SHAPES[name](convention)
     except KeyError:
-        raise ValueError(f"Unknown peak shape {name!r}, one of {sorted(SHAPES)}") from None
+        raise ValueError(f"Unknown peak shape {name!r}, one of {[str(s) for s in ShapeName]}") from None
 

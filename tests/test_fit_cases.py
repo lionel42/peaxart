@@ -11,8 +11,8 @@ the legacy detection found in it (``rt``, ``start``, ``stop``, ``prominence``).
 On 251104.1724.air.1, without the added seeds, the fit returns nothing for 132 of 2744 groups (214 of
 5913 detected peaks). The causes, by case: no prior for a narrow peak (the legacy detection needs 9 scans
 of width: a peak of ~1 s FWHM is missed) and its window cut on a flank (fixed: ``add_seeds``); small peaks
-on a sloping background (the baseline of the fit is constant); peaks wider than the sigma bounds (0.2-2 x
-the expected sigma of the rt model, at least 0.5 s), e.g. the broad air hump.
+on a sloping background (the baseline of the fit was constant; fixed: ``background``); peaks wider than the
+sigma bounds (0.2-2 x the expected sigma of the rt model, at least 0.5 s), e.g. the broad air hump.
 """
 
 from __future__ import annotations
@@ -42,9 +42,9 @@ def fit(case: dict, y=None, **config):
 
 
 OLD = {"add_seeds": False, "sigma_bounds": (0.2, 2.0), "valley_split": None, "baseline_max_factor": None,
-       "peak_shape": "pap_papai"}
+       "peak_shape": "pap_papai", "background": "constant"}
 """The fit before the fixes (no added seeds, the sigma bounds of the HR extraction, groups not split, the
-baseline bound rising with the refits, Pap-Papai peaks): the cases fail with it."""
+baseline bound rising with the refits, Pap-Papai peaks, a constant baseline): the cases fail with it."""
 
 
 def in_window(case: dict, fitted):
@@ -54,8 +54,8 @@ def in_window(case: dict, fitted):
 
 
 def window_r2(case: dict, fitted) -> float:
-    """R2 of the fitted signal (baseline + the fitted peaks in the window, with the peak function of the fit:
-    ``attrs["peak_shape"]``) over the group window."""
+    """R2 of the fitted signal (the background, :func:`peaxart.peak_background`, + the fitted peaks in the window,
+    with the peak function of the fit: ``attrs["peak_shape"]``) over the group window."""
     lo, hi = case["source"]["group_window"]
     w = (case["t"] >= lo) & (case["t"] <= hi)
     t, y = case["t"][w], case["y"][w]
@@ -63,7 +63,7 @@ def window_r2(case: dict, fitted) -> float:
     if mine.empty:
         return float("nan")
     shape = peak_shape(fitted.attrs.get("peak_shape", "pap_papai"))
-    model = mine["baseline"].iloc[0] + sum(shape.value(t, p.shape_height, p.shape_rt, p.rt_sigma, p.rt_tailing)
+    model = px.peak_background(t, mine) + sum(shape.value(t, p.shape_height, p.shape_rt, p.rt_sigma, p.rt_tailing)
                                            for p in mine.itertuples())
     return float(1 - np.sum((y - model) ** 2) / np.sum((y - y.mean()) ** 2))
 
@@ -136,24 +136,40 @@ def test_tail_peak_of_split_part():
 # --- small peaks on a sloping background: m/z 28, 1351-1400 s -------------------------------------
 #
 # Bumps of ~1e4 on the tail of N2 (1e5 -> 2e4 over the window): with a constant baseline a straight line
-# explains the window as well as the peaks.
+# explains the window as well as the peaks. Fixed by the other backgrounds (``ChromatogramFitConfig.background``:
+# each window fitted with a constant, a linear and an exponential one, the best kept). The background is in fact
+# a plateau dropping at ~1368 s, which neither follows: the first bump, on the end of the plateau, is fitted
+# 0.85 s before its detected apex, and the shoulder at 1384.7 s (3e3 on 3.7e4) is lost.
 
 SLOPED = "sloped_background_mz028"
-SLOPED_RT = [1364.85, 1372.68, 1384.67, 1392.34]
+SLOPED_RT = [1364.85, 1372.68, 1392.34]
+SLOPED_SHOULDER_RT = 1384.67
 
 
-def test_sloped_background_what_holds():
+def test_sloped_background_constant():
     case = load(SLOPED)
     lo, hi = case["source"]["group_window"]
     y = case["y"][(case["t"] >= lo) & (case["t"] <= hi)]
     assert y[:20].mean() > 3 * y[-20:].mean()  # the background falls across the window
-    assert in_window(case, fit(case)).empty
+    assert in_window(case, fit(case, background="constant")).empty
 
 
-@pytest.mark.xfail(strict=True, reason="constant baseline: the bumps on a sloping background are rejected")
-def test_sloped_background_fitted():
+@pytest.mark.parametrize("background", ["linear", "exponential", None])
+def test_sloped_background_fitted(background):
     case = load(SLOPED)
-    assert_peaks_at(in_window(case, fit(case)), SLOPED_RT, 0.5)
+    fitted = in_window(case, fit(case) if background is None else fit(case, background=background))
+    assert len(fitted) == 3
+    assert_peaks_at(fitted, SLOPED_RT[:1], 1.0)
+    assert_peaks_at(fitted, SLOPED_RT[1:], 0.5)
+    assert (fitted["baseline_slope"] < 0).all()
+    assert window_r2(case, fitted) > 0.97  # linear 0.972, exponential 0.978
+
+
+@pytest.mark.xfail(strict=True, reason="the background is a plateau dropping at ~1368 s: neither a line nor a "
+                   "decay, the residual of the drop makes the shoulder insignificant")
+def test_sloped_background_shoulder():
+    case = load(SLOPED)
+    assert_peaks_at(in_window(case, fit(case)), [SLOPED_SHOULDER_RT], 0.5)
 
 
 # --- broad hump: m/z 40, 1225-1288 s ---------------------------------------------------------------
@@ -171,10 +187,12 @@ def test_broad_hump_old():
 
 
 def test_broad_hump_fitted():
-    """With the EMG: 3 peaks, R2 0.976 (Pap-Papai: 5 peaks, R2 0.999: the one case where it is better)."""
+    """With the EMG on a constant baseline: 3 peaks, R2 0.976 (Pap-Papai: 5 peaks, R2 0.999); with the selected
+    background (exponential here): 4 peaks, R2 0.998."""
     case = load(BROAD)
+    assert window_r2(case, in_window(case, fit(case, background="constant"))) > 0.97
     fitted = in_window(case, fit(case))
-    assert window_r2(case, fitted) > 0.97
+    assert window_r2(case, fitted) > 0.99
     assert_peaks_at(fitted, [1235.06, 1257.72], 1.5)  # the two main maxima
     expected = px.config.ExtractionConfig().rt_sigma_at(1250.0)  # ~0.6 s
     assert fitted["rt_sigma"].max() > 2 * expected  # broader than the old upper bound

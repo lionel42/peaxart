@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 
+from peaxart.backgrounds import BackgroundName
+from peaxart.shapes import ShapeName
+
 
 @dataclass(frozen=True)
 class ExtractionConfig:
@@ -76,8 +79,21 @@ class ExtractionConfig:
     with the peak), at least ``rt_sigma_floor``."""
     rt_sigma_floor: tuple[float, float] = (0.5, 0.8)
     """Smallest lower and upper bounds of the fitted rt sigma (s)."""
-    rt_peak_shape: str = "pap_papai"
-    """The chromatographic peak function, by name (:data:`peaxart.shapes.SHAPES`): ``"pap_papai"``, ``"emg"``."""
+    rt_peak_shape: ShapeName | str = ShapeName.PAP_PAPAI
+    """The chromatographic peak function (:class:`peaxart.shapes.ShapeName`, or its string): ``"pap_papai"``,
+    ``"emg"``."""
+    rt_background: BackgroundName | str | tuple[BackgroundName | str, ...] = BackgroundName.CONSTANT
+    """The background under the peaks of a window (:class:`peaxart.backgrounds.BackgroundName`, or its string):
+    ``"constant"`` (legacy), ``"linear"``, ``"exponential"``. Several: each window is fitted with the first,
+    then with each other one, kept if clearly better (``rt_background_ratio``)."""
+    rt_background_ratio: float = 0.8
+    """Another background is kept if its fit has at least as many peaks in the window and a residual standard
+    deviation (corrected for the number of parameters) below this times the one of the current fit, or if the
+    current fit has no peak and it has some."""
+    rt_background_noise: float | None = None
+    """The other backgrounds are not tried in a window whose fit with the first has a residual standard deviation
+    below this times the noise of the data (second differences, :func:`peaxart.chromatogram.noise_std`). None:
+    always tried."""
     rt_tailing_max: float | None = None
     """Upper bound of the fitted tail parameter of the peaks (default: the shape's: Pap-Papai 1.6, defined in
     ]0, 2[; EMG 3 tau / sigma)."""

@@ -2,7 +2,8 @@
 
 Legacy ``fit_chromato``: the per-scan areas of the peaks of one m/z group
 are fitted as a function of rt with a sum of chromatographic peaks (Pap and
-Papai) plus a constant baseline. Peaks whose height is not significant
+Papai; any peak function of :mod:`peaxart.shapes`) plus a constant baseline (any
+background of :mod:`peaxart.backgrounds`). Peaks whose height is not significant
 (Student t test against the residuals and the baseline uncertainty) are
 removed and the fit is redone. The fit is rejected if it is not better than
 a straight line (``ratio_to_linear_fit``).
@@ -17,10 +18,12 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import t as student_t
 
+from peaxart.backgrounds import Background
+from peaxart.backgrounds import background as background_of
 from peaxart.config import ExtractionConfig
 from peaxart.detect import histogram_centres, peak_detect
 from peaxart.leastsq import fit
-from peaxart.shapes import PeakShape, peak_shape
+from peaxart.shapes import PeakShape, ShapeName, peak_shape
 
 
 @dataclass
@@ -53,13 +56,36 @@ class ChromatoPeaks:
     n_points: int
     """Number of per-scan peaks used by the fit."""
     baseline: float
+    """The constant background; with another background (:attr:`background`): its mean over the window."""
     apex_rt: np.ndarray | None = None
     """rt (s) and height of the maximum of each peak (the shape parameters ``rt`` / ``height`` are its
     location and amplitude: the same for a shape whose maximum is at its location, e.g. Pap-Papai)."""
     apex_height: np.ndarray | None = None
+    background: Background | None = None
+    """The background (:mod:`peaxart.backgrounds`; None: constant, :attr:`baseline`), its parameters and the
+    window (t0, t1) they refer to."""
+    background_params: np.ndarray | None = None
+    background_span: tuple[float, float] | None = None
 
     def __len__(self) -> int:
         return len(self.rt)
+
+    def background_at(self, t) -> np.ndarray:
+        """The fitted background at times ``t``."""
+        if self.background is None:
+            return np.full(np.shape(t), self.baseline)
+        return self.background.value(t, self.background_params, self.background_span)
+
+    def background_slope(self, t) -> np.ndarray:
+        """Its derivative at times ``t``."""
+        if self.background is None:
+            return np.zeros(np.shape(t))
+        return self.background.slope(t, self.background_params, self.background_span)
+
+    @property
+    def n_params(self) -> int:
+        """Number of fitted parameters: the background and 4 per peak."""
+        return (1 if self.background is None else self.background.n_params) + 4 * len(self)
 
 
 def _linear_fit_std(x, y):
@@ -105,13 +131,13 @@ def rt_outliers(y, k: float, dominance: float = 3.0, half_width: int = 2) -> np.
     return out
 
 
-def local_linear_test(x, y, y_peaks, baseline, k, support_fraction=0.01):
+def local_linear_test(x, y, y_peaks, baseline, k, support_fraction=0.01, n_background=1):
     """Does peak ``k`` explain its region better than a straight background?
 
     On the points where the peak is above ``support_fraction`` of its height,
     the data minus the other fitted peaks are compared with (a) the baseline
-    plus this peak and (b) a least squares line. The residual standard
-    deviations are corrected for the number of parameters (5 for the
+    (a value, or one per point of ``x``) plus this peak and (b) a least squares line. The residual standard
+    deviations are corrected for the number of parameters (``n_background`` + 4 for the
     baseline + peak, 2 for the line).
 
     :return: (ratio std(a) / std(b), support mask, the line on the support plus
@@ -122,17 +148,18 @@ def local_linear_test(x, y, y_peaks, baseline, k, support_fraction=0.01):
     support = peak > support_fraction * peak.max() if peak.max() > 0 else np.zeros(len(x), bool)
     n = int(support.sum())
     others = y_peaks.sum(axis=0) - peak
-    if n <= 5:
+    n_model = n_background + 4
+    if n <= n_model:
         return np.inf, support, np.full(n, np.nan)  # too few points to support a peak
     data = (y - others)[support]
     xs = x[support]
-    ssr_peak = np.sum((data - baseline - peak[support]) ** 2)
+    ssr_peak = np.sum((data - np.broadcast_to(baseline, np.shape(x))[support] - peak[support]) ** 2)
     a, b = np.polyfit(xs - xs.mean(), data, 1)
     line = a * (xs - xs.mean()) + b
     ssr_line = np.sum((data - line) ** 2)
     if ssr_line == 0:
         return np.inf, support, line + others[support]
-    ratio = float(np.sqrt(ssr_peak / (n - 5)) / np.sqrt(ssr_line / (n - 2)))
+    ratio = float(np.sqrt(ssr_peak / (n - n_model)) / np.sqrt(ssr_line / (n - 2)))
     return ratio, support, line + others[support]
 
 
@@ -172,7 +199,7 @@ def fit_chromato(
     area: np.ndarray,
     mu_guess: np.ndarray,
     apex_guess: np.ndarray,
-    baseline_guess: float,
+    baseline_guess: float | np.ndarray,
     dt: float,
     sigma_guess_value,
     window: tuple[float, float],
@@ -191,9 +218,10 @@ def fit_chromato(
     on_abort: str = "best",
     sigma_bounds: tuple[float, float] = (0.2, 2.0),
     sigma_floor: tuple[float, float] = (0.5, 0.8),
-    baseline_max: float | None = None,
+    baseline_max: float | np.ndarray | None = None,
     tailing_max: float | None = None,
     shape: PeakShape | None = None,
+    background: Background | None = None,
 ) -> ChromatoPeaks | None:
     """Fit chromatographic peaks to the per-scan areas ``area(rt)``.
 
@@ -201,7 +229,11 @@ def fit_chromato(
     :param sigma_guess_value: start value of the rt sigma (s): one for all peaks, or one per peak.
     :param sigma_bounds, sigma_floor: the sigma of a peak stays within ``sigma_bounds`` x its start value,
         the lower bound at least ``sigma_floor[0]``, the upper one at least ``sigma_floor[1]`` (s).
-    :param baseline_max: upper bound of the baseline (default: 10 x its start value, at least 3).
+    :param baseline_guess, baseline_max: start value and upper bound of the baseline (default: 10 x its start
+        value, at least 3); with ``background``: of its parameters (:meth:`peaxart.backgrounds.Background.guess`,
+        :meth:`~peaxart.backgrounds.Background.limit`).
+    :param background: the background (:mod:`peaxart.backgrounds`, its parameters over ``window``; default
+        constant).
     :param shape: the peak function (:class:`peaxart.shapes.PeakShape`; default Pap-Papai of ``convention``);
         ``tailing_max``: upper bound of its tail parameter (default: the shape's).
     :param window: (start, stop) of the rt window (s), used for the number of
@@ -228,12 +260,18 @@ def fit_chromato(
     window_start = len(rejected) if rejected is not None else 0
     n_peaks = len(mu_guess)
     std_linear = _linear_fit_std(x, y)
-    baseline_guess = max(0, baseline_guess)
+    bg = background or background_of()
+    nb = bg.n_params
+    span = (float(window[0]), float(window[1]))
+    bg_guess = np.atleast_1d(np.asarray(baseline_guess, dtype=float)).copy()
+    if nb == 1:
+        bg_guess[0] = max(0, bg_guess[0])
+    bg_limit = None if baseline_max is None else np.atleast_1d(np.asarray(baseline_max, dtype=float))
     sigma_guess = np.zeros(n_peaks) + sigma_guess_value
     sigma_guess_min = sigma_guess * sigma_bounds[0]
     sigma_guess_max = sigma_guess * sigma_bounds[1]
-    h_guess = np.asarray(apex_guess, dtype=float) - baseline_guess
-    shape = shape or peak_shape("pap_papai", convention)
+    h_guess = np.asarray(apex_guess, dtype=float) - bg.value(mu_guess, bg_guess, span)
+    shape = shape or peak_shape(ShapeName.PAP_PAPAI, convention)
     tail_lo, tail_hi = shape.tail_bounds[0], shape.tail_bounds[1] if tailing_max is None else tailing_max
     alpha_guess = np.full(n_peaks, shape.tail_start)
     # the starts are apexes (detected): the location of a shape whose maximum is after it starts earlier, and
@@ -245,10 +283,8 @@ def fit_chromato(
     t_value_lod = None
 
     while True:
-        # parameters: baseline, then (mu, sigma, height, tailing) per peak
-        hi = [max(3.0, baseline_guess * 10) if baseline_max is None else max(3.0, baseline_max)]
-        p0 = [min(max(1.0, baseline_guess), hi[0])]
-        lo = [min(max(0.0, baseline_guess / 3), p0[0])]
+        # parameters: the background, then (mu, sigma, height, tailing) per peak
+        p0, lo, hi = bg.bounds(bg_guess, bg_limit, span)
         for i in range(n_peaks):
             p0 += [mu_guess[i], sigma_guess[i], max(2.0, h_guess[i]), alpha_guess[i]]
             lo += [mu_guess[i] - bound - back[i], max(sigma_floor[0], sigma_guess_min[i]), max(1.0, h_guess[i] / 10.0),
@@ -258,33 +294,36 @@ def fit_chromato(
         def residual(p, n_peaks=n_peaks):
             # baseline + sum of the peaks, in the legacy order
             peaks = [
-                shape.value(x, p[3 + 4 * i], p[1 + 4 * i], p[2 + 4 * i], p[4 + 4 * i]) for i in range(n_peaks)
+                shape.value(x, p[nb + 2 + 4 * i], p[nb + 4 * i], p[nb + 1 + 4 * i], p[nb + 3 + 4 * i])
+                for i in range(n_peaks)
             ]
-            return p[0] + np.sum(peaks, axis=0) - y
+            base = p[0] if nb == 1 else bg.value(x, p[:nb], span)
+            return base + np.sum(peaks, axis=0) - y
 
         jac = None
         if not legacy_numerics:
 
             def jac(p, n_peaks=n_peaks):
-                out = np.empty((len(x), 1 + 4 * n_peaks))
-                out[:, 0] = 1.0
+                out = np.empty((len(x), nb + 4 * n_peaks))
+                out[:, :nb] = bg.jac(x, p[:nb], span)
                 for i in range(n_peaks):
                     _, d_mu, d_sigma, d_height, d_tailing = shape.jac(
-                        x, p[3 + 4 * i], p[1 + 4 * i], p[2 + 4 * i], p[4 + 4 * i]
+                        x, p[nb + 2 + 4 * i], p[nb + 4 * i], p[nb + 1 + 4 * i], p[nb + 3 + 4 * i]
                     )
-                    out[:, 1 + 4 * i : 5 + 4 * i] = np.column_stack([d_mu, d_sigma, d_height, d_tailing])
+                    out[:, nb + 4 * i : nb + 4 + 4 * i] = np.column_stack([d_mu, d_sigma, d_height, d_tailing])
                 return out
 
         res = fit(
             residual, p0, lo, hi, jac=jac, exact=legacy_numerics, max_iterations=max_iterations, on_abort=on_abort
         )
-        params = res.params
-        baseline = params[0]
-        mu = params[1::4][:n_peaks]
-        sigma = params[2::4][:n_peaks]
-        height = params[3::4][:n_peaks]
-        tailing = params[4::4][:n_peaks]
-        mu_stderr = res.stderr[1::4][:n_peaks]
+        params = np.asarray(res.params)
+        bg_params = params[:nb]
+        baseline = params[0] if nb == 1 else bg.value(x, bg_params, span)  # a value, or one per point
+        mu = params[nb::4][:n_peaks]
+        sigma = params[nb + 1::4][:n_peaks]
+        height = params[nb + 2::4][:n_peaks]
+        tailing = params[nb + 3::4][:n_peaks]
+        mu_stderr = np.asarray(res.stderr)[nb::4][:n_peaks]
         y_peaks = np.array([shape.value(x, height[i], mu[i], sigma[i], tailing[i]) for i in range(n_peaks)])
         y_no_baseline = y_peaks.sum(axis=0)
         resid = y - (y_no_baseline + baseline)
@@ -317,7 +356,7 @@ def fit_chromato(
             _finish_lines(rejected, window_start, x, y, None)
             return None
         significant = (height - t_height - t_baseline >= 0) & (height - 2 * t_baseline >= 0)
-        tests = [local_linear_test(x, y, y_peaks, baseline, i) for i in range(n_peaks)]
+        tests = [local_linear_test(x, y, y_peaks, baseline, i, n_background=nb) for i in range(n_peaks)]
         linear_ratio = np.array([t[0] for t in tests])
         coverage = np.array([apex_coverage(x, mu[i], sigma[i], dt, rt_min, rt_max) for i in range(n_peaks)])
         fails_line = (linear_ratio > peak_linear_ratio) if peak_linear_ratio is not None else np.zeros(n_peaks, bool)
@@ -336,7 +375,7 @@ def fit_chromato(
                         "height": float(height[i]),
                         "rt_sigma": float(sigma[i]),
                         "rt_tailing": float(tailing[i]),
-                        "baseline": float(baseline),
+                        "baseline": float(bg.value(np.array([mu[i]]), bg_params, span)[0]),
                         "linear_ratio": float(linear_ratio[i]),
                         "coverage": float(coverage[i]),
                         "reason": " and ".join(reasons),
@@ -357,7 +396,7 @@ def fit_chromato(
         sigma_guess_min = sigma_guess_min[significant]
         sigma_guess_max = sigma_guess_max[significant]
         back = back[significant]
-        baseline_guess = res.raw[0]
+        bg_guess = np.asarray(res.raw[:nb], dtype=float)
         n_peaks = int(significant.sum())
 
     _finish_lines(rejected, window_start, x, y, y_peaks)
@@ -391,9 +430,12 @@ def fit_chromato(
         linear_ratio=linear_ratio,
         coverage=coverage,
         n_points=len_x,
-        baseline=float(baseline),
+        baseline=float(np.mean(baseline)),
         apex_rt=apex[:, 0],
         apex_height=apex[:, 1],
+        background=bg,
+        background_params=bg_params.copy(),
+        background_span=span,
     )
 
 
@@ -446,10 +488,14 @@ def fit_series(
         start values, with ``pw`` the expected peak width (s); or ``(n, 3)``: (rt, apex, rt sigma), the
         sigma then starts at the given one (peaks added by the extra-peak search: the expected one).
         Default :func:`legacy_detect`.
-    :param baseline_guess: ``baseline_guess(y_window) -> float``. Default :func:`legacy_baseline_guess`.
+    :param baseline_guess: ``baseline_guess(y_window) -> float``, the background level of (a part of) a window,
+        the start of the background parameters (:meth:`peaxart.backgrounds.Background.guess`). Default
+        :func:`legacy_baseline_guess`.
     :param rejected: if a list, the rejected candidates are appended (see :func:`fit_chromato`).
     :return: (fit of a window, index of the peak) for each peak, each peak in one window only.
     """
+    from peaxart.chromatogram import noise_std  # not at the top: peaxart.chromatogram imports this module
+
     t = np.asarray(t, dtype=float)
     y = np.asarray(y)
     x_series = np.zeros(len(t)) if x_series is None else np.asarray(x_series, dtype=float)
@@ -461,6 +507,7 @@ def fit_series(
         return out
     rt_bins = t / dt
     shape = peak_shape(config.rt_peak_shape, config.convention)
+    backgrounds = (config.rt_background,) if isinstance(config.rt_background, str) else tuple(config.rt_background)
     for w_start, w_stop in split_into_windows(
         rt_bins[0], rt_bins[-1], dt, np.inf, config.rt_window, config.rt_window_edge
     ):
@@ -481,10 +528,6 @@ def fit_series(
         in_window = (detected[:, 0] >= w_start * dt) & (detected[:, 0] < w_stop * dt)
         if not in_window.any():
             continue
-        base_guess = baseline_guess(w_area)
-        factor = config.rt_baseline_max_factor
-        base_max = None if factor is None else factor * max(base_guess, 1.0)
-        window_rejected: list[dict] = []
         given = detected[:, 2] if detected.shape[1] > 2 else None
 
         def sigma_of(mu_guess, given=given, detected=detected, rt_sigma=rt_sigma):
@@ -497,60 +540,70 @@ def fit_series(
             close = np.abs(mu_guess - detected[nearest, 0]) <= given[nearest]
             return np.where(close, given[nearest], rt_sigma)
 
-        def run_fit(
-            mu_guess,
-            apex_guess,
-            base_guess,
-            rejected_list,
-            position_bound=config.rt_position_bound,
-            w_rt=w_rt,
-            w_area=w_area,
-            w_x=w_x,
-            w_mz=w_mz,
-            rt_sigma=rt_sigma,
-            w_start=w_start,
-            w_stop=w_stop,
-            base_max=base_max,
-        ):
-            return fit_chromato(
-                w_rt,
-                w_area,
-                mu_guess,
-                apex_guess,
-                base_guess,
-                dt,
-                sigma_of(mu_guess),
-                (w_start * dt, w_stop * dt),
-                w_x,
-                w_mz,
-                config.conf_int,
-                config.rt_peak_broadness,
-                config.ratio_to_linear_fit,
-                position_bound,
-                config.convention,
-                config.legacy_numerics,
-                config.peak_linear_ratio,
-                config.peak_min_coverage,
-                rejected=rejected_list,
-                max_iterations=config.rt_max_iterations,
-                on_abort=config.on_abort,
-                sigma_bounds=config.rt_sigma_bounds,
-                sigma_floor=config.rt_sigma_floor,
-                baseline_max=base_max,
-                tailing_max=config.rt_tailing_max,
-                shape=shape,
-            )
+        def fit_window(name, w_rt=w_rt, w_area=w_area, w_x=w_x, w_mz=w_mz, rt_sigma=rt_sigma, w_start=w_start,
+                       w_stop=w_stop, detected=detected):
+            """The fit of the window with the background ``name``, and its rejected candidates."""
+            bg = background_of(name)
+            base_guess = bg.guess(w_rt, w_area, (w_start * dt, w_stop * dt), baseline_guess)
+            base_max = bg.limit(base_guess, config.rt_baseline_max_factor)
 
-        fitted = run_fit(detected[:, 0], detected[:, 1], base_guess, window_rejected)
-        # Try one more peak where the residual is largest (coeluting peaks closer
-        # than the detection window); keep it only if the fit is clearly better.
-        for _ in range(config.rt_extra_peaks):
-            if fitted is None:
-                break
-            trial = _try_extra_peak(fitted, w_rt, w_area, dt, rt_sigma, config, run_fit)
-            if trial is None:
-                break
-            fitted, window_rejected = trial
+            def run_fit(mu_guess, apex_guess, base_guess, rejected_list, position_bound=config.rt_position_bound):
+                return fit_chromato(
+                    w_rt,
+                    w_area,
+                    mu_guess,
+                    apex_guess,
+                    base_guess,
+                    dt,
+                    sigma_of(mu_guess),
+                    (w_start * dt, w_stop * dt),
+                    w_x,
+                    w_mz,
+                    config.conf_int,
+                    config.rt_peak_broadness,
+                    config.ratio_to_linear_fit,
+                    position_bound,
+                    config.convention,
+                    config.legacy_numerics,
+                    config.peak_linear_ratio,
+                    config.peak_min_coverage,
+                    rejected=rejected_list,
+                    max_iterations=config.rt_max_iterations,
+                    on_abort=config.on_abort,
+                    sigma_bounds=config.rt_sigma_bounds,
+                    sigma_floor=config.rt_sigma_floor,
+                    baseline_max=base_max,
+                    tailing_max=config.rt_tailing_max,
+                    shape=shape,
+                    background=bg,
+                )
+
+            window_rejected: list[dict] = []
+            fitted = run_fit(detected[:, 0], detected[:, 1], base_guess, window_rejected)
+            # Try one more peak where the residual is largest (coeluting peaks closer
+            # than the detection window); keep it only if the fit is clearly better.
+            for _ in range(config.rt_extra_peaks):
+                if fitted is None:
+                    break
+                trial = _try_extra_peak(fitted, w_rt, w_area, dt, rt_sigma, config, run_fit)
+                if trial is None:
+                    break
+                fitted, window_rejected = trial
+            return fitted, window_rejected
+
+        # the first background, then each other one if it is clearly better (_better_background); not tried if
+        # the residuals of the first are already at the noise level
+        fitted, window_rejected = fit_window(backgrounds[0])
+        others = backgrounds[1:]
+        if others and config.rt_background_noise is not None and fitted is not None and _residual_std(
+            fitted, w_rt, w_area, shape
+        ) <= config.rt_background_noise * noise_std(w_area):
+            others = ()
+        for name in others:
+            trial = fit_window(name)
+            if _better_background(trial[0], fitted, w_rt, w_area, shape, (w_start * dt, w_stop * dt),
+                                  config.rt_background_ratio):
+                fitted, window_rejected = trial
         if rejected is not None:
             rejected.extend(r for r in window_rejected if w_start * dt <= r["rt"] < w_stop * dt)
         if fitted is None:
@@ -559,17 +612,32 @@ def fit_series(
     return out
 
 
+def _better_background(trial, current, t, y, shape, window, ratio: float) -> bool:
+    """Is the fit ``trial`` (of another background) clearly better than ``current``: ``current`` has no peak in
+    the ``window`` and ``trial`` has some, or ``trial`` has at least as many there and its residual standard
+    deviation (corrected for the number of parameters) is below ``ratio`` x the one of ``current``."""
+    if trial is None:
+        return False
+    n_trial = int(np.sum((trial.rt >= window[0]) & (trial.rt < window[1])))
+    if current is None:
+        return n_trial > 0
+    n_current = int(np.sum((current.rt >= window[0]) & (current.rt < window[1])))
+    if n_current == 0:
+        return n_trial > 0
+    return n_trial >= n_current and _residual_std(trial, t, y, shape) < ratio * _residual_std(current, t, y, shape)
+
+
 def _model(f, t, shape):
     """Baseline + sum of the fitted chromatographic peaks at times ``t``."""
-    out = np.full(len(t), f.baseline)
+    out = f.background_at(np.asarray(t, dtype=float))
     for k in range(len(f)):
         out = out + shape.value(t, f.height[k], f.rt[k], f.sigma[k], f.tailing[k])
     return out
 
 
 def _residual_std(f, t, y, shape) -> float:
-    """Residual standard deviation corrected for the 1 + 4 n parameters."""
-    dof = len(t) - (1 + 4 * len(f))
+    """Residual standard deviation corrected for the number of parameters (the background and 4 per peak)."""
+    dof = len(t) - f.n_params
     if dof <= 0:
         return np.inf
     return float(np.sqrt(np.sum((y - _model(f, t, shape)) ** 2) / dof))
@@ -592,7 +660,7 @@ def _try_extra_peak(fitted, t, y, dt, rt_sigma, config, run_fit):
     width = min(len(t), max(3, int(round(rt_sigma / dt))))
     smooth = np.convolve(resid, np.ones(width) / width, mode="same")
     i = int(np.argmax(smooth))
-    if smooth[i] <= 0 or len(t) <= 1 + 4 * (len(fitted) + 1):
+    if smooth[i] <= 0 or len(t) <= fitted.n_params + 4:
         return None
     # the current peak nearest to the new one, and where it would start if it is moved
     # (see below): two coeluting peaks would be at about these two positions
@@ -606,7 +674,8 @@ def _try_extra_peak(fitted, t, y, dt, rt_sigma, config, run_fit):
     # start height of the new peak: the (smoothed) data, the residual underestimates
     # it when the current peak covers both compounds
     data = np.convolve(y, np.ones(width) / width, mode="same")
-    apex = np.append(fitted.height + fitted.baseline, max(fitted.baseline + smooth[i], data[i]))
+    base = fitted.background_at(np.append(fitted.rt, t[i]))
+    apex = np.append(fitted.height + base[:-1], max(base[-1] + smooth[i], data[i]))
     # two starts: the current peaks unchanged, and the nearest one moved away from
     # the new one by half their distance (one peak fitted to two coeluting ones sits
     # between them); the better fit is kept. The peaks may move by up to one rt
@@ -615,7 +684,7 @@ def _try_extra_peak(fitted, t, y, dt, rt_sigma, config, run_fit):
     trial, trial_std, trial_rejected = None, np.inf, []
     for start in starts:
         start_rejected: list[dict] = []
-        f = run_fit(np.append(start, t[i]), apex, fitted.baseline, start_rejected, position_bound=bound)
+        f = run_fit(np.append(start, t[i]), apex, fitted.background_params, start_rejected, position_bound=bound)
         # >=: the refit may also drop a weak peak elsewhere in the window
         if f is not None and len(f) >= max(2, len(fitted)):
             std = _residual_std(f, t, y, shape)
