@@ -320,3 +320,27 @@ def test_large_group_fitted():
     fitted = in_window(case, fit(case))
     assert_peaks_at(fitted, LARGE_RT, 0.5)
     assert window_r2(case, fitted) > 0.99
+
+
+# --- single peak split in two: SF6, m/z 127, 1056-1091 s (quadrupole SIM window) ----------------------
+#
+# One peak (2.2e3, sigma ~2 s, esper's detection and fit: ``sigma_from_detection``) was fitted as two, 2.5 s
+# apart (1069.6 and 1072.1 s): the EMG does not follow its tail exactly, two peaks lower the residual (0.64 x),
+# they are 1.8 sigma apart, and the shoulder test passed on noise: it smoothed the data at the expected sigma
+# of the rt model (0.43 s at 1070 s: a TOF model, 3 scans of this 6 Hz quadrupole), where a single peak shows
+# 6-14 sign changes of its curvature (0-1 smoothed at its fitted sigma). 14 of 586 runs of 2026-09 (SF6 on
+# m/z 127; never on m/z 89). Fixed: the shoulder test smooths at the sigma of the fitted peaks.
+
+SPLIT = "split_single_peak_mz127"
+SPLIT_RT = 1070.0
+
+
+def test_split_single_peak():
+    case = load(SPLIT)
+    assert case["source"]["compound"] == "SF6" and len(case["rt"]) == 1  # one detected peak
+    fitted = in_window(case, fit(case, sigma_from_detection=True))
+    assert len(fitted) == 1, np.round(fitted["rt"], 2).tolist()
+    assert_peaks_at(fitted, [SPLIT_RT], 0.5)
+    assert window_r2(case, fitted) > 0.99
+    # without: sigma starts at the expected 0.43 s, bounded at 5 x (2.15 s): one peak too, R2 0.84
+    assert len(in_window(case, fit(case))) == 1

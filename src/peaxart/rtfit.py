@@ -652,7 +652,7 @@ def _try_extra_peak(fitted, t, y, dt, rt_sigma, config, run_fit):
         current one, and the added peak is at least ``rt_extra_peak_min_height``
         times the highest one, ``rt_extra_peak_min_separation`` rt sigmas away
         from the others and (``rt_extra_peak_shoulder``) makes a shoulder or a dip
-        in the data, else None.
+        in the data (smoothed at the scale of the fitted peaks), else None.
     """
     shape = peak_shape(config.rt_peak_shape, config.convention)
     resid = y - _model(fitted, t, shape)
@@ -702,7 +702,13 @@ def _try_extra_peak(fitted, t, y, dt, rt_sigma, config, run_fit):
         return None
     if config.rt_extra_peak_shoulder:
         nearest = np.flatnonzero(others)[np.argmin(distance)]
-        if _curvature_sign_changes(t, y, dt, trial.rt[nearest], trial.rt[added], smoothing) < 2:
+        # smoothed at the scale of the two fitted peaks, not of the expected sigma only: it can be far
+        # narrower than the peaks (the rt model of a TOF on a quadrupole: 0.43 s at 1070 s, SF6 there
+        # sigma ~2 s), and the noise of a single peak then shows "shoulders" (6-14 sign changes, 0-1
+        # smoothed at its sigma). Never less smoothed than the first test (above).
+        sigma = max(rt_sigma, float(min(trial.sigma[nearest], trial.sigma[added])))
+        peak_smoothing = max(2, min(len(t), max(3, int(round(sigma / dt)))) // 2)
+        if _curvature_sign_changes(t, y, dt, trial.rt[nearest], trial.rt[added], peak_smoothing) < 2:
             return None
     if trial_std > config.rt_extra_peak_ratio * _residual_std(fitted, t, y, shape):
         return None

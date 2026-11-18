@@ -155,7 +155,8 @@ class ExtractionConfig:
     rt_extra_peak_shoulder: bool = True
     """... and if the data show a shoulder or a dip between the two apexes: the curvature
     of the (smoothed) per-scan areas changes sign at least twice between them (a single
-    peak has one inflection on its flank). Without it, broad low peaks are added to fill
+    peak has one inflection on its flank; smoothed at the sigma of the fitted peaks, at
+    least the expected one: smoothed less, the noise makes shoulders). Without it, broad low peaks are added to fill
     the tail of strongly tailing peaks (e.g. m/p-xylene)."""
 
     lod: float = 0.0
